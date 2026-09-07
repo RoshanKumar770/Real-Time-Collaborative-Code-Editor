@@ -3,19 +3,19 @@ import Prism from "prismjs";
 import "prismjs/components/prism-typescript";
 import "prismjs/components/prism-python";
 import "prismjs/components/prism-json";
-import { 
-  GitMerge, 
-  Activity, 
-  Wifi, 
-  Layers, 
-  Sparkles, 
-  Clock, 
-  CheckCircle2, 
-  AlertCircle, 
-  Play, 
+import {
+  GitMerge,
+  Activity,
+  Wifi,
+  Layers,
+  Sparkles,
+  Clock,
+  CheckCircle2,
+  AlertCircle,
+  Play,
   ChevronDown,
   ShieldCheck,
-  Zap
+  Zap,
 } from "lucide-react";
 import { UserPresence, CodeFile } from "../types";
 import { TextCRDTDoc, CRDTOperation } from "../utils/crdt";
@@ -28,8 +28,15 @@ interface CodeEditorProps {
   users: UserPresence[];
   currentUser: UserPresence | null;
   roomId?: string;
-  onCodeChange: (newContent: string, crdtOps?: CRDTOperation[], isRemoteMerge?: boolean) => void;
-  onCursorChange: (cursor: { line: number; ch: number } | null, selection: any) => void;
+  onCodeChange: (
+    newContent: string,
+    crdtOps?: CRDTOperation[],
+    isRemoteMerge?: boolean
+  ) => void;
+  onCursorChange: (
+    cursor: { line: number; ch: number } | null,
+    selection: any
+  ) => void;
   onRunCode: () => void;
   onSaveCheckpoint: () => void;
   onRegisterPrettify?: (prettifyFn: () => Promise<void>) => void;
@@ -53,25 +60,45 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   const activeLineRef = useRef<HTMLDivElement>(null);
 
   // CRDT Engine references
+  // IMPORTANT:
+  // file.id is the stable logical document ID shared by all replicas.
+  // currentUser.id remains the CRDT peer/origin ID.
   const crdtDocRef = useRef<TextCRDTDoc>(
-    new TextCRDTDoc(currentUser?.id || `peer-${Math.random().toString(36).slice(2, 7)}`, file.content)
+    new TextCRDTDoc(
+      currentUser?.id ||
+        `peer-${Math.random().toString(36).slice(2, 7)}`,
+      file.content,
+      file.id
+    )
   );
+
   const lastContentRef = useRef<string>(file.content);
   const activeFileIdRef = useRef<string>(file.id);
-  const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
+  const selectionRef = useRef<{ start: number; end: number }>({
+    start: 0,
+    end: 0,
+  });
 
   // UI state
-  const [cursorPos, setCursorPos] = useState<{ line: number; ch: number }>({ line: 1, ch: 1 });
+  const [cursorPos, setCursorPos] = useState<{
+    line: number;
+    ch: number;
+  }>({ line: 1, ch: 1 });
+
   const [fontSize, setFontSize] = useState<number>(14);
   const [isCrdtMenuOpen, setIsCrdtMenuOpen] = useState<boolean>(false);
   const [simulatedLatency, setSimulatedLatency] = useState<number>(0);
-  const [conflictsResolvedCount, setConflictsResolvedCount] = useState<number>(0);
+  const [conflictsResolvedCount, setConflictsResolvedCount] =
+    useState<number>(0);
+
   const [recentConflictNotice, setRecentConflictNotice] = useState<{
     author: string;
     timestamp: number;
     detail: string;
   } | null>(null);
+
   const [isFormatting, setIsFormatting] = useState<boolean>(false);
+
   const [formatNotice, setFormatNotice] = useState<{
     type: "success" | "error" | "info";
     message: string;
@@ -81,34 +108,49 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   // Auto-dismiss formatting notification after 3.5s
   useEffect(() => {
     if (!formatNotice) return;
+
     const timer = setTimeout(() => {
       setFormatNotice(null);
     }, 3500);
+
     return () => clearTimeout(timer);
   }, [formatNotice]);
 
   // Exact character width and integer line-height dynamically measured from the DOM
-  const [charDimensions, setCharDimensions] = useState<{ width: number; height: number }>({
+  const [charDimensions, setCharDimensions] = useState<{
+    width: number;
+    height: number;
+  }>({
     width: 8.42,
     height: Math.round(14 * 1.6),
   });
 
   useEffect(() => {
     const span = document.createElement("span");
-    span.style.fontFamily = "'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
+
+    span.style.fontFamily =
+      "'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace";
     span.style.fontSize = `${fontSize}px`;
     span.style.position = "absolute";
     span.style.visibility = "hidden";
     span.style.whiteSpace = "pre";
-    span.textContent = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"; // 100 chars
+
+    span.textContent =
+      "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX";
+
     document.body.appendChild(span);
+
     const rect = span.getBoundingClientRect();
     const measuredWidth = rect.width / 100;
     const measuredHeight = Math.round(fontSize * 1.6);
+
     document.body.removeChild(span);
 
     if (measuredWidth > 0) {
-      setCharDimensions({ width: measuredWidth, height: measuredHeight });
+      setCharDimensions({
+        width: measuredWidth,
+        height: measuredHeight,
+      });
     }
   }, [fontSize]);
 
@@ -119,63 +161,107 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   useEffect(() => {
     if (file.id !== activeFileIdRef.current) {
       activeFileIdRef.current = file.id;
+
       crdtDocRef.current = new TextCRDTDoc(
-        currentUser?.id || `peer-${Math.random().toString(36).slice(2, 7)}`,
-        file.content
+        currentUser?.id ||
+          `peer-${Math.random().toString(36).slice(2, 7)}`,
+        file.content,
+        file.id
       );
+
       lastContentRef.current = file.content;
+
       if (textareaRef.current) {
         textareaRef.current.value = file.content;
       }
     } else if (file.content !== lastContentRef.current) {
       // External content update (e.g. checkpoint restore)
-      const currentStart = textareaRef.current?.selectionStart ?? selectionRef.current.start;
-      const currentEnd = textareaRef.current?.selectionEnd ?? selectionRef.current.end;
+      const currentStart =
+        textareaRef.current?.selectionStart ??
+        selectionRef.current.start;
+
+      const currentEnd =
+        textareaRef.current?.selectionEnd ??
+        selectionRef.current.end;
 
       const diffOps = crdtDocRef.current.reconcileWithText(file.content);
-      const newStart = crdtDocRef.current.transformCursor(currentStart, diffOps);
-      const newEnd = crdtDocRef.current.transformCursor(currentEnd, diffOps);
+
+      const newStart = crdtDocRef.current.transformCursor(
+        currentStart,
+        diffOps
+      );
+
+      const newEnd = crdtDocRef.current.transformCursor(
+        currentEnd,
+        diffOps
+      );
 
       lastContentRef.current = file.content;
+
       if (textareaRef.current) {
         textareaRef.current.value = file.content;
         textareaRef.current.setSelectionRange(newStart, newEnd);
       }
-      selectionRef.current = { start: newStart, end: newEnd };
+
+      selectionRef.current = {
+        start: newStart,
+        end: newEnd,
+      };
     }
   }, [file.id, file.content, currentUser?.id]);
 
   // Update cursor position tracking
   const updateCursorTracking = useCallback(() => {
     if (!textareaRef.current) return;
-    const { selectionStart, selectionEnd, selectionDirection, value } = textareaRef.current;
-    selectionRef.current = { start: selectionStart, end: selectionEnd };
 
-    // Determine the active caret position (respecting selection direction)
+    const {
+      selectionStart,
+      selectionEnd,
+      selectionDirection,
+      value,
+    } = textareaRef.current;
+
+    selectionRef.current = {
+      start: selectionStart,
+      end: selectionEnd,
+    };
+
+    // Determine the active caret position
     const isBackward = selectionDirection === "backward";
     const activeCaretPos = isBackward ? selectionStart : selectionEnd;
+
     const textBefore = value.substring(0, activeCaretPos);
     const lineArr = textBefore.split("\n");
-    const currentLine = lineArr.length;
-    const currentCh = lineArr[lineArr.length - 1].length + 1;
 
-    setCursorPos({ line: currentLine, ch: currentCh });
+    const currentLine = lineArr.length;
+    const currentCh =
+      lineArr[lineArr.length - 1].length + 1;
+
+    setCursorPos({
+      line: currentLine,
+      ch: currentCh,
+    });
 
     // Handle selection if any
     let selObj = null;
+
     if (selectionStart !== selectionEnd) {
       const start = Math.min(selectionStart, selectionEnd);
       const end = Math.max(selectionStart, selectionEnd);
 
       const textStart = value.substring(0, start);
       const startLines = textStart.split("\n");
+
       const startLine = startLines.length;
-      const startCh = startLines[startLines.length - 1].length + 1;
+      const startCh =
+        startLines[startLines.length - 1].length + 1;
 
       const textEnd = value.substring(0, end);
       const endLines = textEnd.split("\n");
+
       const endLine = endLines.length;
-      const endCh = endLines[endLines.length - 1].length + 1;
+      const endCh =
+        endLines[endLines.length - 1].length + 1;
 
       selObj = {
         startLine,
@@ -185,22 +271,43 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       };
     }
 
-    onCursorChange({ line: currentLine, ch: currentCh }, selObj);
+    onCursorChange(
+      {
+        line: currentLine,
+        ch: currentCh,
+      },
+      selObj
+    );
   }, [onCursorChange]);
 
   // Click line number to focus and select that line
   const handleLineNumberClick = useCallback(
     (targetLine: number) => {
       const textarea = textareaRef.current;
+
       if (!textarea) return;
+
       const linesArr = file.content.split("\n");
       let charIndex = 0;
-      for (let i = 0; i < targetLine - 1 && i < linesArr.length; i++) {
+
+      for (
+        let i = 0;
+        i < targetLine - 1 && i < linesArr.length;
+        i++
+      ) {
         charIndex += linesArr[i].length + 1;
       }
-      const lineLen = linesArr[targetLine - 1]?.length || 0;
+
+      const lineLen =
+        linesArr[targetLine - 1]?.length || 0;
+
       textarea.focus();
-      textarea.setSelectionRange(charIndex, charIndex + lineLen);
+
+      textarea.setSelectionRange(
+        charIndex,
+        charIndex + lineLen
+      );
+
       updateCursorTracking();
     },
     [file.content, updateCursorTracking]
@@ -213,43 +320,78 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       if (data.fileId !== activeFileIdRef.current) return;
 
       const currentSocket = socketService.getSocket();
+
       // Ignore self echoes
-      if (currentSocket && data.authorSocketId === currentSocket.id) return;
+      if (
+        currentSocket &&
+        data.authorSocketId === currentSocket.id
+      ) {
+        return;
+      }
 
       if (!data.ops || data.ops.length === 0) return;
 
-      // 1. Capture current cursor before remote operations merge
+      // Capture current cursor before remote operations merge
       const textarea = textareaRef.current;
-      const curStart = textarea ? textarea.selectionStart : selectionRef.current.start;
-      const curEnd = textarea ? textarea.selectionEnd : selectionRef.current.end;
 
-      // 2. Apply remote CRDT ops with deterministic ordering & Lamport clock
-      const mergeResult = crdtDocRef.current.applyRemoteOps(data.ops);
+      const curStart = textarea
+        ? textarea.selectionStart
+        : selectionRef.current.start;
 
-      // 3. Transform caret position against remote ops: PREVENTS CURSOR JUMPING!
-      const newStart = crdtDocRef.current.transformCursor(curStart, data.ops);
-      const newEnd = crdtDocRef.current.transformCursor(curEnd, data.ops);
+      const curEnd = textarea
+        ? textarea.selectionEnd
+        : selectionRef.current.end;
+
+      // Apply remote CRDT ops with deterministic ordering & Lamport clock
+      const mergeResult =
+        crdtDocRef.current.applyRemoteOps(data.ops);
+
+      // Transform caret position against remote ops
+      const newStart =
+        crdtDocRef.current.transformCursor(
+          curStart,
+          data.ops
+        );
+
+      const newEnd =
+        crdtDocRef.current.transformCursor(
+          curEnd,
+          data.ops
+        );
 
       lastContentRef.current = mergeResult.text;
-      selectionRef.current = { start: newStart, end: newEnd };
 
-      // 4. Update textarea value and atomically restore caret
+      selectionRef.current = {
+        start: newStart,
+        end: newEnd,
+      };
+
+      // Update textarea value and restore caret
       if (textarea) {
         textarea.value = mergeResult.text;
-        textarea.setSelectionRange(newStart, newEnd);
+        textarea.setSelectionRange(
+          newStart,
+          newEnd
+        );
       }
 
-      // 5. Notify parent (isRemoteMerge = true prevents re-broadcasting)
-      onCodeChange(mergeResult.text, undefined, true);
+      // Notify parent
+      onCodeChange(
+        mergeResult.text,
+        undefined,
+        true
+      );
 
-      // 6. Update cursor coordinates and sync scroll
+      // Update cursor coordinates and sync scroll
       updateCursorTracking();
 
       if (mergeResult.conflictsResolved > 0) {
-        setConflictsResolvedCount((c) => c + mergeResult.conflictsResolved);
+        setConflictsResolvedCount(
+          (c) => c + mergeResult.conflictsResolved
+        );
       }
 
-      // Show temporary non-intrusive toast notice of concurrent resolution
+      // Show temporary conflict resolution notice
       setRecentConflictNotice({
         author: data.authorName || "Collaborator",
         timestamp: Date.now(),
@@ -265,14 +407,20 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   // Auto-dismiss conflict toast after 3.5 seconds
   useEffect(() => {
     if (!recentConflictNotice) return;
+
     const timer = setTimeout(() => {
       setRecentConflictNotice(null);
     }, 3500);
+
     return () => clearTimeout(timer);
   }, [recentConflictNotice]);
 
   // Split lines for line numbers
-  const lines = useMemo(() => file.content.split("\n"), [file.content]);
+  const lines = useMemo(
+    () => file.content.split("\n"),
+    [file.content]
+  );
+
   const lineCount = lines.length;
 
   // Filter collaborators who are viewing THIS specific file
@@ -280,42 +428,63 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     return users.filter(
       (u) =>
         u.activeFileId === file.id &&
-        (!currentUser || (u.id !== currentUser.id && u.socketId !== currentUser.socketId)) &&
+        (!currentUser ||
+          (u.id !== currentUser.id &&
+            u.socketId !== currentUser.socketId)) &&
         u.cursor
     );
   }, [users, file.id, currentUser]);
 
-  // Compute visual column taking into account tab characters and 2-space tab stops
-  const getVisualColumn = useCallback((lineText: string | undefined, charIndex: number) => {
-    if (!lineText) return Math.max(0, charIndex - 1);
-    let col = 0;
-    const targetIdx = Math.min(Math.max(0, charIndex - 1), lineText.length);
-    for (let i = 0; i < targetIdx; i++) {
-      if (lineText[i] === "\t") {
-        col += 2 - (col % 2);
-      } else {
-        col += 1;
+  // Compute visual column taking into account tab characters
+  const getVisualColumn = useCallback(
+    (lineText: string | undefined, charIndex: number) => {
+      if (!lineText) {
+        return Math.max(0, charIndex - 1);
       }
-    }
-    return col;
-  }, []);
 
-  // Synchronize scroll between textarea, syntax highlight pre, line numbers, and floating cursors
+      let col = 0;
+
+      const targetIdx = Math.min(
+        Math.max(0, charIndex - 1),
+        lineText.length
+      );
+
+      for (let i = 0; i < targetIdx; i++) {
+        if (lineText[i] === "\t") {
+          col += 2 - (col % 2);
+        } else {
+          col += 1;
+        }
+      }
+
+      return col;
+    },
+    []
+  );
+
+  // Synchronize scroll
   const handleScroll = useCallback(() => {
     if (!textareaRef.current) return;
-    const { scrollTop, scrollLeft } = textareaRef.current;
+
+    const {
+      scrollTop,
+      scrollLeft,
+    } = textareaRef.current;
 
     if (preRef.current) {
       preRef.current.scrollTop = scrollTop;
       preRef.current.scrollLeft = scrollLeft;
     }
+
     if (lineNumbersRef.current) {
       lineNumbersRef.current.scrollTop = scrollTop;
     }
+
     if (cursorsLayerRef.current) {
       cursorsLayerRef.current.scrollTop = scrollTop;
       cursorsLayerRef.current.scrollLeft = scrollLeft;
     }
+
     if (activeLineRef.current) {
       activeLineRef.current.scrollTop = scrollTop;
     }
@@ -324,45 +493,73 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   // Syntax highlighting via Prism
   const highlightedCode = useMemo(() => {
     let grammar = Prism.languages.javascript;
+
     if (file.language === "typescript") {
-      grammar = Prism.languages.typescript || Prism.languages.javascript;
+      grammar =
+        Prism.languages.typescript ||
+        Prism.languages.javascript;
     } else if (file.language === "python") {
-      grammar = Prism.languages.python || Prism.languages.javascript;
+      grammar =
+        Prism.languages.python ||
+        Prism.languages.javascript;
     } else if (file.language === "json") {
-      grammar = Prism.languages.json || Prism.languages.javascript;
+      grammar =
+        Prism.languages.json ||
+        Prism.languages.javascript;
     } else if (file.language === "html") {
-      grammar = Prism.languages.html || Prism.languages.markup || Prism.languages.javascript;
+      grammar =
+        Prism.languages.html ||
+        Prism.languages.markup ||
+        Prism.languages.javascript;
     } else if (file.language === "css") {
-      grammar = Prism.languages.css || Prism.languages.javascript;
+      grammar =
+        Prism.languages.css ||
+        Prism.languages.javascript;
     }
 
     try {
-      return Prism.highlight(file.content, grammar, file.language);
+      return Prism.highlight(
+        file.content,
+        grammar,
+        file.language
+      );
     } catch {
       return file.content;
     }
   }, [file.content, file.language]);
 
-  // Handle textarea keyboard events (Tab indent, shortcuts, cursor changes)
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    // Run shortcut: Ctrl+Enter or Cmd+Enter
-    if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+  // Handle textarea keyboard events
+  const handleKeyDown = (
+    e: React.KeyboardEvent<HTMLTextAreaElement>
+  ) => {
+    // Run shortcut
+    if (
+      (e.ctrlKey || e.metaKey) &&
+      e.key === "Enter"
+    ) {
       e.preventDefault();
       onRunCode();
       return;
     }
 
-    // Save shortcut: Ctrl+S or Cmd+S
-    if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+    // Save shortcut
+    if (
+      (e.ctrlKey || e.metaKey) &&
+      e.key === "s"
+    ) {
       e.preventDefault();
       onSaveCheckpoint();
       return;
     }
 
-    // Prettify shortcut: Shift+Alt+F (VS Code standard) or Cmd/Ctrl+Shift+F
+    // Prettify shortcut
     if (
-      (e.shiftKey && e.altKey && (e.key === "f" || e.key === "F")) ||
-      ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === "f" || e.key === "F"))
+      (e.shiftKey &&
+        e.altKey &&
+        (e.key === "f" || e.key === "F")) ||
+      ((e.ctrlKey || e.metaKey) &&
+        e.shiftKey &&
+        (e.key === "f" || e.key === "F"))
     ) {
       e.preventDefault();
       handlePrettify();
@@ -372,58 +569,111 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     // Tab key indent
     if (e.key === "Tab") {
       e.preventDefault();
+
       const textarea = textareaRef.current;
+
       if (!textarea) return;
 
-      const { selectionStart, selectionEnd, value } = textarea;
-      const spaces = "  "; // 2 spaces
+      const {
+        selectionStart,
+        selectionEnd,
+        value,
+      } = textarea;
+
+      const spaces = "  ";
 
       if (e.shiftKey) {
         // Unindent
-        const linesBefore = value.substring(0, selectionStart).split("\n");
-        const currentLineIdx = linesBefore.length - 1;
+        const linesBefore = value
+          .substring(0, selectionStart)
+          .split("\n");
+
+        const currentLineIdx =
+          linesBefore.length - 1;
+
         const allLines = value.split("\n");
-        if (allLines[currentLineIdx].startsWith("  ")) {
-          allLines[currentLineIdx] = allLines[currentLineIdx].slice(2);
+
+        if (
+          allLines[currentLineIdx].startsWith("  ")
+        ) {
+          allLines[currentLineIdx] =
+            allLines[currentLineIdx].slice(2);
+
           const newContent = allLines.join("\n");
-          const ops = crdtDocRef.current.reconcileWithText(newContent);
+
+          const ops =
+            crdtDocRef.current.reconcileWithText(
+              newContent
+            );
+
           lastContentRef.current = newContent;
+
           onCodeChange(newContent, ops);
+
           setTimeout(() => {
-            textarea.selectionStart = Math.max(0, selectionStart - 2);
-            textarea.selectionEnd = Math.max(0, selectionEnd - 2);
+            textarea.selectionStart = Math.max(
+              0,
+              selectionStart - 2
+            );
+
+            textarea.selectionEnd = Math.max(
+              0,
+              selectionEnd - 2
+            );
+
             updateCursorTracking();
           }, 0);
         }
       } else {
         // Normal Tab indent
-        const newContent = value.substring(0, selectionStart) + spaces + value.substring(selectionEnd);
-        const ops = crdtDocRef.current.reconcileWithText(newContent);
+        const newContent =
+          value.substring(0, selectionStart) +
+          spaces +
+          value.substring(selectionEnd);
+
+        const ops =
+          crdtDocRef.current.reconcileWithText(
+            newContent
+          );
+
         lastContentRef.current = newContent;
+
         onCodeChange(newContent, ops);
+
         setTimeout(() => {
-          textarea.selectionStart = selectionStart + 2;
-          textarea.selectionEnd = selectionStart + 2;
+          textarea.selectionStart =
+            selectionStart + 2;
+
+          textarea.selectionEnd =
+            selectionStart + 2;
+
           updateCursorTracking();
         }, 0);
       }
+
       return;
     }
 
-    // For all other navigation keys (Arrow keys, Home, End, Backspace), update cursor tracking in the next frame
     requestAnimationFrame(() => {
       updateCursorTracking();
     });
   };
 
-  // Local text modification via input: compute minimal CRDT operations and emit
-  const handleInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+  // Local text modification via input
+  const handleInput = (
+    e: React.ChangeEvent<HTMLTextAreaElement>
+  ) => {
     const newContent = e.target.value;
+
     lastContentRef.current = newContent;
 
-    // Generate surgical CRDT operations through character diffing
-    const ops = crdtDocRef.current.reconcileWithText(newContent);
+    const ops =
+      crdtDocRef.current.reconcileWithText(
+        newContent
+      );
+
     onCodeChange(newContent, ops);
+
     updateCursorTracking();
   };
 
@@ -433,28 +683,55 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     socketService.setSimulatedLatency(ms);
   };
 
-  // Trigger synthetic concurrent race edit to demonstrate real-time CRDT merge
+  // Trigger synthetic concurrent race edit
   const handleSimulateConcurrentEdit = () => {
     if (!textareaRef.current) return;
+
     const curLine = cursorPos.line;
     const curCh = cursorPos.ch;
 
-    // Simulate an edit on the line immediately above or below by an AI peer
-    const simulatedPeerId = "collab-peer-synthetic";
-    const timestampStr = new Date().toLocaleTimeString();
+    const simulatedPeerId =
+      "collab-peer-synthetic";
+
+    const timestampStr =
+      new Date().toLocaleTimeString();
+
     const concurrentSnippet = `\n// [Concurrent CRDT Sync @ ${timestampStr}] Validated Ln ${curLine}\n`;
 
-    // Reconcile or insert directly into doc as if from socket
-    const tempDoc = new TextCRDTDoc(simulatedPeerId, file.content);
-    // Find line offset
-    const lineOffsets = [0];
-    for (let i = 0; i < file.content.length; i++) {
-      if (file.content[i] === "\n") lineOffsets.push(i + 1);
-    }
-    const targetOffset = lineOffsets[Math.min(curLine, lineOffsets.length - 1)] || file.content.length;
-    const ops = tempDoc.insert(targetOffset, concurrentSnippet);
+    // IMPORTANT:
+    // Use the same file.id so the synthetic collaborator
+    // shares the same logical initial character IDs.
+    const tempDoc = new TextCRDTDoc(
+      simulatedPeerId,
+      file.content,
+      file.id
+    );
 
-    // Apply via CRDT socket pipeline
+    const lineOffsets = [0];
+
+    for (
+      let i = 0;
+      i < file.content.length;
+      i++
+    ) {
+      if (file.content[i] === "\n") {
+        lineOffsets.push(i + 1);
+      }
+    }
+
+    const targetOffset =
+      lineOffsets[
+        Math.min(
+          curLine,
+          lineOffsets.length - 1
+        )
+      ] || file.content.length;
+
+    const ops = tempDoc.insert(
+      targetOffset,
+      concurrentSnippet
+    );
+
     socketService.emitCRDTOps(
       roomId,
       file.id,
@@ -466,18 +743,42 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       "Concurrent Bot"
     );
 
-    // Also trigger locally if self-testing
-    const merge = crdtDocRef.current.applyRemoteOps(ops);
-    const newStart = crdtDocRef.current.transformCursor(textareaRef.current.selectionStart, ops);
-    const newEnd = crdtDocRef.current.transformCursor(textareaRef.current.selectionEnd, ops);
+    const merge =
+      crdtDocRef.current.applyRemoteOps(ops);
+
+    const newStart =
+      crdtDocRef.current.transformCursor(
+        textareaRef.current.selectionStart,
+        ops
+      );
+
+    const newEnd =
+      crdtDocRef.current.transformCursor(
+        textareaRef.current.selectionEnd,
+        ops
+      );
 
     textareaRef.current.value = merge.text;
-    textareaRef.current.setSelectionRange(newStart, newEnd);
+
+    textareaRef.current.setSelectionRange(
+      newStart,
+      newEnd
+    );
+
     lastContentRef.current = merge.text;
-    onCodeChange(merge.text, undefined, true);
+
+    onCodeChange(
+      merge.text,
+      undefined,
+      true
+    );
+
     updateCursorTracking();
 
-    setConflictsResolvedCount((c) => c + 1);
+    setConflictsResolvedCount(
+      (c) => c + 1
+    );
+
     setRecentConflictNotice({
       author: "Concurrent Bot",
       timestamp: Date.now(),
@@ -485,89 +786,158 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
     });
   };
 
-  // Keep scroll and cursor synchronized on mount and file change
+  // Keep scroll and cursor synchronized
   useEffect(() => {
     handleScroll();
     updateCursorTracking();
-  }, [file.id, handleScroll, updateCursorTracking]);
+  }, [
+    file.id,
+    handleScroll,
+    updateCursorTracking,
+  ]);
 
-  // Document selection change to track mouse drag selections or navigation
+  // Document selection change tracking
   useEffect(() => {
     const handleSelectionChange = () => {
-      if (document.activeElement === textareaRef.current) {
+      if (
+        document.activeElement ===
+        textareaRef.current
+      ) {
         updateCursorTracking();
       }
     };
-    document.addEventListener("selectionchange", handleSelectionChange);
+
+    document.addEventListener(
+      "selectionchange",
+      handleSelectionChange
+    );
+
     return () => {
-      document.removeEventListener("selectionchange", handleSelectionChange);
+      document.removeEventListener(
+        "selectionchange",
+        handleSelectionChange
+      );
     };
   }, [updateCursorTracking]);
 
   // Prettify active file handler
-  const handlePrettify = useCallback(async () => {
-    if (isFormatting || !file) return;
-    setIsFormatting(true);
+  const handlePrettify = useCallback(
+    async () => {
+      if (isFormatting || !file) return;
 
-    try {
-      const currentCode = textareaRef.current ? textareaRef.current.value : file.content;
-      const result = await formatCode(currentCode, file.language);
+      setIsFormatting(true);
 
-      if (result.success) {
-        if (result.changed && result.formatted !== undefined) {
-          const newContent = result.formatted;
-          const textarea = textareaRef.current;
+      try {
+        const currentCode =
+          textareaRef.current
+            ? textareaRef.current.value
+            : file.content;
 
-          // Reconcile with local CRDT document to generate surgical CRDT operations
-          const ops = crdtDocRef.current.reconcileWithText(newContent);
-          lastContentRef.current = newContent;
+        const result = await formatCode(
+          currentCode,
+          file.language
+        );
 
-          if (textarea) {
-            const prevStart = textarea.selectionStart;
-            const prevEnd = textarea.selectionEnd;
-            textarea.value = newContent;
-            const newStart = Math.min(prevStart, newContent.length);
-            const newEnd = Math.min(prevEnd, newContent.length);
-            textarea.setSelectionRange(newStart, newEnd);
+        if (result.success) {
+          if (
+            result.changed &&
+            result.formatted !== undefined
+          ) {
+            const newContent =
+              result.formatted;
+
+            const textarea =
+              textareaRef.current;
+
+            const ops =
+              crdtDocRef.current.reconcileWithText(
+                newContent
+              );
+
+            lastContentRef.current =
+              newContent;
+
+            if (textarea) {
+              const prevStart =
+                textarea.selectionStart;
+
+              const prevEnd =
+                textarea.selectionEnd;
+
+              textarea.value = newContent;
+
+              const newStart = Math.min(
+                prevStart,
+                newContent.length
+              );
+
+              const newEnd = Math.min(
+                prevEnd,
+                newContent.length
+              );
+
+              textarea.setSelectionRange(
+                newStart,
+                newEnd
+              );
+            }
+
+            onCodeChange(
+              newContent,
+              ops
+            );
+
+            updateCursorTracking();
+
+            setFormatNotice({
+              type: "success",
+              message: `Formatted ${file.name} (${file.language})`,
+              timestamp: Date.now(),
+            });
+          } else {
+            setFormatNotice({
+              type: "info",
+              message: `Code is already formatted (${file.language})`,
+              timestamp: Date.now(),
+            });
           }
-
-          onCodeChange(newContent, ops);
-          updateCursorTracking();
-
-          setFormatNotice({
-            type: "success",
-            message: `Formatted ${file.name} (${file.language})`,
-            timestamp: Date.now(),
-          });
         } else {
           setFormatNotice({
-            type: "info",
-            message: `Code is already formatted (${file.language})`,
+            type: "error",
+            message: result.error
+              ? `${result.error}`
+              : "Formatting failed",
             timestamp: Date.now(),
           });
         }
-      } else {
+      } catch (err: any) {
         setFormatNotice({
           type: "error",
-          message: result.error ? `${result.error}` : "Formatting failed",
+          message: String(
+            err?.message ||
+              "Failed to prettify code"
+          ),
           timestamp: Date.now(),
         });
+      } finally {
+        setIsFormatting(false);
       }
-    } catch (err: any) {
-      setFormatNotice({
-        type: "error",
-        message: String(err?.message || "Failed to prettify code"),
-        timestamp: Date.now(),
-      });
-    } finally {
-      setIsFormatting(false);
-    }
-  }, [file, isFormatting, onCodeChange, updateCursorTracking]);
+    },
+    [
+      file,
+      isFormatting,
+      onCodeChange,
+      updateCursorTracking,
+    ]
+  );
 
-  // Expose prettify trigger if parent needs it
+  // Expose prettify trigger
   useEffect(() => {
     onRegisterPrettify?.(handlePrettify);
-  }, [onRegisterPrettify, handlePrettify]);
+  }, [
+    onRegisterPrettify,
+    handlePrettify,
+  ]);
 
   return (
     <div className="flex-1 flex flex-col bg-[#0b0f19] h-full overflow-hidden select-text relative">
@@ -575,16 +945,27 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
       <div className="h-9 px-4 bg-slate-900/80 border-b border-slate-800 flex items-center justify-between text-xs text-slate-400 select-none">
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-2 font-mono text-slate-200">
-            <FileLanguageIcon fileName={file.name} language={file.language} size="xs" />
-            <span className="font-semibold">{file.name}</span>
+            <FileLanguageIcon
+              fileName={file.name}
+              language={file.language}
+              size="xs"
+            />
+            <span className="font-semibold">
+              {file.name}
+            </span>
           </div>
+
           <span className="text-slate-600">|</span>
+
           <span className="text-[11px] uppercase tracking-wider text-slate-400 font-mono">
             {file.language}
           </span>
+
           <span className="text-slate-600">|</span>
+
           <span className="text-[11px] text-slate-400">
-            {lineCount} {lineCount === 1 ? "line" : "lines"}
+            {lineCount}{" "}
+            {lineCount === 1 ? "line" : "lines"}
           </span>
         </div>
 
@@ -592,7 +973,11 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           {/* CRDT Conflict Resolution Engine Status Pill */}
           <div className="relative">
             <button
-              onClick={() => setIsCrdtMenuOpen((prev) => !prev)}
+              onClick={() =>
+                setIsCrdtMenuOpen(
+                  (prev) => !prev
+                )
+              }
               className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] border font-medium transition cursor-pointer ${
                 simulatedLatency > 0
                   ? "bg-amber-500/10 border-amber-500/30 text-amber-300 hover:bg-amber-500/20"
@@ -600,65 +985,86 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
               }`}
               title="Click to configure CRDT Conflict Resolution & Latency Simulation"
             >
-              <span className={`w-1.5 h-1.5 rounded-full ${simulatedLatency > 0 ? "bg-amber-400 animate-pulse" : "bg-emerald-400 animate-pulse"}`} />
+              <span
+                className={`w-1.5 h-1.5 rounded-full ${
+                  simulatedLatency > 0
+                    ? "bg-amber-400 animate-pulse"
+                    : "bg-emerald-400 animate-pulse"
+                }`}
+              />
+
               <GitMerge className="w-3.5 h-3.5" />
+
               <span>CRDT RGA</span>
+
               {simulatedLatency > 0 ? (
                 <span className="text-[10px] font-mono px-1 py-0.2 bg-amber-500/20 rounded">
                   +{simulatedLatency}ms
                 </span>
               ) : (
-                <span className="text-[10px] font-mono opacity-80">Synced</span>
+                <span className="text-[10px] font-mono opacity-80">
+                  Synced
+                </span>
               )}
+
               {conflictsResolvedCount > 0 && (
                 <span className="px-1 py-0.2 rounded-full bg-indigo-500/30 text-indigo-300 text-[9px] font-bold">
                   {conflictsResolvedCount}
                 </span>
               )}
+
               <ChevronDown className="w-3 h-3 opacity-60 ml-0.5" />
             </button>
 
-            {/* CRDT Diagnostics & Latency Simulation Popover */}
             {isCrdtMenuOpen && (
-              <div 
-                className="absolute right-0 top-full mt-2 w-80 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl p-3 z-50 text-slate-300 animate-in fade-in zoom-in-95 duration-100"
-              >
+              <div className="absolute right-0 top-full mt-2 w-80 bg-slate-900 border border-slate-700 rounded-lg shadow-2xl p-3 z-50 text-slate-300 animate-in fade-in zoom-in-95 duration-100">
                 <div className="flex items-center justify-between border-b border-slate-800 pb-2 mb-2.5">
                   <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-100">
                     <ShieldCheck className="w-4 h-4 text-emerald-400" />
-                    <span>CRDT Conflict Resolution</span>
+                    <span>
+                      CRDT Conflict Resolution
+                    </span>
                   </div>
+
                   <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300">
                     RGA-Vector
                   </span>
                 </div>
 
                 <p className="text-[11px] text-slate-400 mb-3 leading-relaxed">
-                  Prevents cursor jumping, lost characters, and race conditions by maintaining a Replicated Growable Array with Lamport causality vectors.
+                  Prevents cursor jumping, lost characters, and race
+                  conditions by maintaining a Replicated Growable Array
+                  with Lamport causality vectors.
                 </p>
 
-                {/* Conflict metrics */}
                 <div className="grid grid-cols-2 gap-2 mb-3">
                   <div className="bg-slate-950/70 p-2 rounded border border-slate-800 text-[11px]">
-                    <div className="text-slate-500 text-[10px] uppercase font-mono">Resolved Conflicts</div>
+                    <div className="text-slate-500 text-[10px] uppercase font-mono">
+                      Resolved Conflicts
+                    </div>
+
                     <div className="text-base font-mono font-bold text-emerald-400 mt-0.5">
                       {conflictsResolvedCount}
                     </div>
                   </div>
+
                   <div className="bg-slate-950/70 p-2 rounded border border-slate-800 text-[11px]">
-                    <div className="text-slate-500 text-[10px] uppercase font-mono">Lamport Clock</div>
+                    <div className="text-slate-500 text-[10px] uppercase font-mono">
+                      Lamport Clock
+                    </div>
+
                     <div className="text-base font-mono font-bold text-indigo-400 mt-0.5">
                       {crdtDocRef.current.lamportClock}
                     </div>
                   </div>
                 </div>
 
-                {/* Latency Simulation Selector */}
                 <div className="mb-3">
                   <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 block mb-1.5 flex items-center justify-between">
                     <span>Simulate High Latency</span>
                     <Wifi className="w-3 h-3 text-slate-500" />
                   </label>
+
                   <div className="grid grid-cols-4 gap-1">
                     {[
                       { label: "0ms", val: 0 },
@@ -668,7 +1074,9 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                     ].map((opt) => (
                       <button
                         key={opt.val}
-                        onClick={() => handleSetLatency(opt.val)}
+                        onClick={() =>
+                          handleSetLatency(opt.val)
+                        }
                         className={`py-1 text-[11px] font-mono rounded border transition text-center ${
                           simulatedLatency === opt.val
                             ? "bg-indigo-600 border-indigo-500 text-white font-bold"
@@ -681,28 +1089,36 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
                   </div>
                 </div>
 
-                {/* Simulate Concurrent Race Action */}
                 <button
-                  onClick={handleSimulateConcurrentEdit}
+                  onClick={
+                    handleSimulateConcurrentEdit
+                  }
                   className="w-full flex items-center justify-center gap-1.5 py-1.5 px-2 bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 hover:border-indigo-500/60 rounded text-indigo-300 hover:text-white text-[11px] font-medium transition cursor-pointer"
                 >
                   <Zap className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>Test Concurrent Race Edit</span>
+                  <span>
+                    Test Concurrent Race Edit
+                  </span>
                 </button>
               </div>
             )}
           </div>
 
-          {/* Active collaborator status in editor */}
+          {/* Active collaborator status */}
           {fileCollaborators.length > 0 && (
             <div className="flex items-center gap-1.5 bg-slate-800/80 px-2 py-0.5 rounded border border-slate-700 text-[11px]">
-              <span className="text-slate-300 font-medium">Collaborating:</span>
+              <span className="text-slate-300 font-medium">
+                Collaborating:
+              </span>
+
               <div className="flex items-center -space-x-1">
                 {fileCollaborators.map((u) => (
                   <span
                     key={u.id}
                     className="w-4 h-4 rounded-full flex items-center justify-center text-[9px] font-bold text-white border border-slate-900 uppercase"
-                    style={{ backgroundColor: u.color }}
+                    style={{
+                      backgroundColor: u.color,
+                    }}
                     title={`${u.username} at Ln ${u.cursor?.line}, Col ${u.cursor?.ch}`}
                   >
                     {u.username[0]}
@@ -712,12 +1128,13 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             </div>
           )}
 
-          {/* Cursor position display */}
+          {/* Cursor position */}
           <div className="font-mono text-[11px] text-slate-400 bg-slate-950/60 px-2 py-0.5 rounded border border-slate-800">
-            Ln {cursorPos.line}, Col {cursorPos.ch}
+            Ln {cursorPos.line}, Col{" "}
+            {cursorPos.ch}
           </div>
 
-          {/* Prettify Code Button */}
+          {/* Prettify */}
           <button
             id="editor-prettify-button"
             onClick={handlePrettify}
@@ -731,10 +1148,18 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           >
             <Sparkles
               className={`w-3.5 h-3.5 ${
-                isFormatting ? "animate-spin text-indigo-400" : "text-amber-400"
+                isFormatting
+                  ? "animate-spin text-indigo-400"
+                  : "text-amber-400"
               }`}
             />
-            <span>{isFormatting ? "Formatting..." : "Prettify"}</span>
+
+            <span>
+              {isFormatting
+                ? "Formatting..."
+                : "Prettify"}
+            </span>
+
             <span className="hidden lg:inline-block text-[9px] font-mono px-1 py-0.2 rounded bg-slate-950/60 text-slate-400 border border-slate-800">
               ⇧⌥F
             </span>
@@ -743,15 +1168,27 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           {/* Font Size Selector */}
           <div className="flex items-center gap-1 text-[11px] text-slate-400">
             <button
-              onClick={() => setFontSize((s) => Math.max(12, s - 1))}
+              onClick={() =>
+                setFontSize((s) =>
+                  Math.max(12, s - 1)
+                )
+              }
               className="px-1.5 py-0.5 hover:bg-slate-800 rounded text-slate-300 transition cursor-pointer"
               title="Decrease font size"
             >
               A-
             </button>
-            <span className="font-mono">{fontSize}px</span>
+
+            <span className="font-mono">
+              {fontSize}px
+            </span>
+
             <button
-              onClick={() => setFontSize((s) => Math.min(20, s + 1))}
+              onClick={() =>
+                setFontSize((s) =>
+                  Math.min(20, s + 1)
+                )
+              }
               className="px-1.5 py-0.5 hover:bg-slate-800 rounded text-slate-300 transition cursor-pointer"
               title="Increase font size"
             >
@@ -761,16 +1198,22 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
         </div>
       </div>
 
-      {/* Non-intrusive Conflict Resolution Banner */}
+      {/* Conflict Resolution Banner */}
       {recentConflictNotice && (
         <div className="absolute top-10 right-4 z-40 flex items-center gap-2 px-3 py-1.5 bg-slate-900/90 border border-emerald-500/40 rounded-md shadow-xl text-xs text-emerald-300 backdrop-blur-sm animate-in slide-in-from-top-2 duration-150">
           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
-          <span className="font-medium">CRDT Merged:</span>
-          <span className="text-slate-300 font-mono text-[11px]">{recentConflictNotice.detail}</span>
+
+          <span className="font-medium">
+            CRDT Merged:
+          </span>
+
+          <span className="text-slate-300 font-mono text-[11px]">
+            {recentConflictNotice.detail}
+          </span>
         </div>
       )}
 
-      {/* Non-intrusive Prettify Status Notification */}
+      {/* Prettify Status Notification */}
       {formatNotice && (
         <div
           className={`absolute top-10 right-4 z-40 flex items-center gap-2 px-3 py-1.5 rounded-md shadow-xl text-xs backdrop-blur-sm border animate-in slide-in-from-top-2 duration-150 ${
@@ -781,9 +1224,18 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
               : "bg-slate-900/95 border-rose-500/50 text-rose-300"
           }`}
         >
-          {formatNotice.type === "success" && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />}
-          {formatNotice.type === "info" && <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />}
-          {formatNotice.type === "error" && <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />}
+          {formatNotice.type === "success" && (
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+          )}
+
+          {formatNotice.type === "info" && (
+            <Sparkles className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+          )}
+
+          {formatNotice.type === "error" && (
+            <AlertCircle className="w-3.5 h-3.5 text-rose-400 shrink-0" />
+          )}
+
           <span className="font-semibold">
             {formatNotice.type === "success"
               ? "Prettified:"
@@ -791,7 +1243,10 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
               ? "Prettify:"
               : "Prettify Error:"}
           </span>
-          <span className="font-mono text-[11px] max-w-sm truncate">{formatNotice.message}</span>
+
+          <span className="font-mono text-[11px] max-w-sm truncate">
+            {formatNotice.message}
+          </span>
         </div>
       )}
 
@@ -802,20 +1257,27 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
           ref={lineNumbersRef}
           className="w-12 bg-slate-950/70 border-r border-slate-800/60 select-none py-4 overflow-hidden text-right pr-3 font-mono text-slate-600 text-xs shrink-0"
           style={{
-            fontFamily: "'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            fontFamily:
+              "'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
             fontSize: `${fontSize}px`,
             lineHeight: `${lineHeight}px`,
           }}
         >
           {lines.map((_, i) => {
             const lineNum = i + 1;
-            const isCurrentLine = cursorPos.line === lineNum;
+            const isCurrentLine =
+              cursorPos.line === lineNum;
+
             return (
               <div
                 key={i}
-                onClick={() => handleLineNumberClick(lineNum)}
+                onClick={() =>
+                  handleLineNumberClick(lineNum)
+                }
                 className={`transition-colors cursor-pointer hover:text-indigo-300 ${
-                  isCurrentLine ? "text-indigo-400 font-semibold" : "text-slate-600"
+                  isCurrentLine
+                    ? "text-indigo-400 font-semibold"
+                    : "text-slate-600"
                 }`}
                 style={{
                   height: `${lineHeight}px`,
@@ -846,118 +1308,197 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             />
           </div>
 
-          {/* Syntax Highlighting Layer (No whitespace between pre and code to avoid leading newline shift) */}
+          {/* Syntax Highlighting Layer */}
           <pre
             ref={preRef}
             aria-hidden="true"
             className="absolute inset-0 pointer-events-none p-4 m-0 font-mono overflow-hidden whitespace-pre tab-2"
             style={{
-              fontFamily: "'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+              fontFamily:
+                "'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
               fontSize: `${fontSize}px`,
               lineHeight: `${lineHeight}px`,
               tabSize: 2,
             }}
-          ><code
-            dangerouslySetInnerHTML={{ __html: highlightedCode + (file.content.endsWith("\n") ? " " : "") }}
-            className={`language-${file.language} block font-mono`}
-            style={{
-              fontFamily: "inherit",
-              fontSize: "inherit",
-              lineHeight: "inherit",
-              padding: 0,
-              margin: 0,
-              border: 0,
-            }}
-          /></pre>
+          >
+            <code
+              dangerouslySetInnerHTML={{
+                __html:
+                  highlightedCode +
+                  (file.content.endsWith("\n")
+                    ? " "
+                    : ""),
+              }}
+              className={`language-${file.language} block font-mono`}
+              style={{
+                fontFamily: "inherit",
+                fontSize: "inherit",
+                lineHeight: "inherit",
+                padding: 0,
+                margin: 0,
+                border: 0,
+              }}
+            />
+          </pre>
 
-          {/* Remote Collaborators Floating Cursors, Carets & Selections Layer */}
+          {/* Remote Collaborators Layer */}
           <div
             ref={cursorsLayerRef}
             aria-hidden="true"
             className="absolute inset-0 pointer-events-none overflow-hidden"
           >
             {/* Remote selection highlights */}
-            {fileCollaborators.map((collaborator) => {
-              if (!collaborator.selection) return null;
-              const sel = collaborator.selection;
-              const selElements = [];
+            {fileCollaborators.map(
+              (collaborator) => {
+                if (!collaborator.selection)
+                  return null;
 
-              for (let l = sel.startLine; l <= sel.endLine; l++) {
-                const lineStr = lines[l - 1] || "";
-                let startCol = 0;
-                let endCol = lineStr.length;
+                const sel =
+                  collaborator.selection;
 
-                if (l === sel.startLine) {
-                  startCol = getVisualColumn(lineStr, sel.startCh);
+                const selElements = [];
+
+                for (
+                  let l = sel.startLine;
+                  l <= sel.endLine;
+                  l++
+                ) {
+                  const lineStr =
+                    lines[l - 1] || "";
+
+                  let startCol = 0;
+                  let endCol =
+                    lineStr.length;
+
+                  if (
+                    l === sel.startLine
+                  ) {
+                    startCol =
+                      getVisualColumn(
+                        lineStr,
+                        sel.startCh
+                      );
+                  }
+
+                  if (l === sel.endLine) {
+                    endCol =
+                      getVisualColumn(
+                        lineStr,
+                        sel.endCh
+                      );
+                  }
+
+                  const colDiff = Math.max(
+                    1,
+                    endCol - startCol
+                  );
+
+                  const top =
+                    16 +
+                    (l - 1) *
+                      lineHeight;
+
+                  const left =
+                    16 +
+                    startCol *
+                      charWidth;
+
+                  const width =
+                    colDiff *
+                    charWidth;
+
+                  selElements.push(
+                    <div
+                      key={`sel-${collaborator.id || collaborator.socketId}-l${l}`}
+                      className="absolute pointer-events-none rounded-xs"
+                      style={{
+                        top: `${top}px`,
+                        left: `${left}px`,
+                        width: `${width}px`,
+                        height: `${lineHeight}px`,
+                        backgroundColor: `${collaborator.color}35`,
+                        borderBottom: `1.5px solid ${collaborator.color}90`,
+                      }}
+                    />
+                  );
                 }
-                if (l === sel.endLine) {
-                  endCol = getVisualColumn(lineStr, sel.endCh);
-                }
 
-                const colDiff = Math.max(1, endCol - startCol);
-                const top = 16 + (l - 1) * lineHeight;
-                const left = 16 + startCol * charWidth;
-                const width = colDiff * charWidth;
+                return (
+                  <React.Fragment
+                    key={`sel-group-${collaborator.id || collaborator.socketId}`}
+                  >
+                    {selElements}
+                  </React.Fragment>
+                );
+              }
+            )}
 
-                selElements.push(
+            {/* Remote Cursors */}
+            {fileCollaborators.map(
+              (collaborator) => {
+                if (!collaborator.cursor)
+                  return null;
+
+                const {
+                  line,
+                  ch,
+                } = collaborator.cursor;
+
+                const lineStr =
+                  lines[line - 1] || "";
+
+                const visualCol =
+                  getVisualColumn(
+                    lineStr,
+                    ch
+                  );
+
+                const top =
+                  16 +
+                  (line - 1) *
+                    lineHeight;
+
+                const left =
+                  16 +
+                  visualCol *
+                    charWidth;
+
+                return (
                   <div
-                    key={`sel-${collaborator.id || collaborator.socketId}-l${l}`}
-                    className="absolute pointer-events-none rounded-xs"
+                    key={
+                      collaborator.id ||
+                      collaborator.socketId
+                    }
+                    className="absolute pointer-events-none transition-all duration-75 z-20"
                     style={{
                       top: `${top}px`,
                       left: `${left}px`,
-                      width: `${width}px`,
-                      height: `${lineHeight}px`,
-                      backgroundColor: `${collaborator.color}35`,
-                      borderBottom: `1.5px solid ${collaborator.color}90`,
                     }}
-                  />
+                  >
+                    <div
+                      className="absolute -top-5 left-0 flex items-center gap-1 text-[10px] font-semibold text-white px-1.5 py-0.5 rounded shadow-lg whitespace-nowrap z-30 pointer-events-none"
+                      style={{
+                        backgroundColor:
+                          collaborator.color,
+                      }}
+                    >
+                      <span>
+                        {collaborator.username}
+                      </span>
+                    </div>
+
+                    <div
+                      className="w-[2px] animate-cursor-blink shadow-sm"
+                      style={{
+                        height: `${lineHeight}px`,
+                        backgroundColor:
+                          collaborator.color,
+                      }}
+                    />
+                  </div>
                 );
               }
-
-              return (
-                <React.Fragment key={`sel-group-${collaborator.id || collaborator.socketId}`}>
-                  {selElements}
-                </React.Fragment>
-              );
-            })}
-
-            {/* Remote Cursors & Caret flags */}
-            {fileCollaborators.map((collaborator) => {
-              if (!collaborator.cursor) return null;
-              const { line, ch } = collaborator.cursor;
-              const lineStr = lines[line - 1] || "";
-              const visualCol = getVisualColumn(lineStr, ch);
-
-              // Compute top & left precisely aligned with text coordinates
-              const top = 16 + (line - 1) * lineHeight;
-              const left = 16 + visualCol * charWidth;
-
-              return (
-                <div
-                  key={collaborator.id || collaborator.socketId}
-                  className="absolute pointer-events-none transition-all duration-75 z-20"
-                  style={{ top: `${top}px`, left: `${left}px` }}
-                >
-                  {/* Floating User Name Flag */}
-                  <div
-                    className="absolute -top-5 left-0 flex items-center gap-1 text-[10px] font-semibold text-white px-1.5 py-0.5 rounded shadow-lg whitespace-nowrap z-30 pointer-events-none"
-                    style={{ backgroundColor: collaborator.color }}
-                  >
-                    <span>{collaborator.username}</span>
-                  </div>
-
-                  {/* Vertical Caret Bar */}
-                  <div
-                    className="w-[2px] animate-cursor-blink shadow-sm"
-                    style={{
-                      height: `${lineHeight}px`,
-                      backgroundColor: collaborator.color,
-                    }}
-                  />
-                </div>
-              );
-            })}
+            )}
           </div>
 
           {/* Main Interactive Textarea */}
@@ -979,7 +1520,8 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
             autoCorrect="off"
             className="absolute inset-0 w-full h-full p-4 m-0 font-mono resize-none outline-none border-none bg-transparent whitespace-pre overflow-auto tab-2 z-10"
             style={{
-              fontFamily: "'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+              fontFamily:
+                "'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
               fontSize: `${fontSize}px`,
               lineHeight: `${lineHeight}px`,
               tabSize: 2,

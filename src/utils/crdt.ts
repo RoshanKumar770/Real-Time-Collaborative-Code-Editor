@@ -132,18 +132,21 @@ export class TextCRDTDoc {
     tombstoneCount: 0,
   };
 
-  constructor(peerId: string, initialText?: string) {
-    this.peerId = peerId;
-    if (initialText) {
-      this.initFromText(initialText);
-    }
+  constructor(
+  peerId: string,
+  initialText?: string,
+  documentId: string = "default"
+) {
+  this.peerId = peerId;
+  if (initialText) {
+    this.initFromText(initialText, documentId);
   }
+}
 
   /**
    * Reset document and initialize from raw text.
    */
-  public initFromText(text: string, peerId?: string) {
-    if (peerId) this.peerId = peerId;
+  public initFromText(text: string, documentId: string = "default") {
     this.chars = [];
     this.charMap.clear();
     this.lamportClock = 0;
@@ -153,7 +156,7 @@ export class TextCRDTDoc {
       this.lamportClock++;
       const pos = [100 * (i + 1)];
       const charObj: CRDTChar = {
-        id: `${this.peerId}:init:${i}`,
+       id: `${documentId}:init:${i}`,
         peerId: this.peerId,
         clock: this.lamportClock,
         char: text[i],
