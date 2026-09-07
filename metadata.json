@@ -1,0 +1,6 @@
+{
+  "name": "Real-Time Collaborative Code Editor",
+  "description": "A real-time collaborative code editor with simultaneous multi-user editing, live code synchronization, presence cursors, chat, and version history.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
