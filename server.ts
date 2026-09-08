@@ -242,12 +242,11 @@ function getOrCreateRoom(roomId: string, name?: string): ServerRoom {
 getOrCreateRoom("global-workspace", "Global Workspace");
 getOrCreateRoom("algos-lab", "Algorithm & Data Structures Lab");
 
-async function startServer() {
-  const app = express();
-  const PORT = 3000;
-  const httpServer = http.createServer(app);
+export const app = express();
+const PORT = 3000;
+export const httpServer = http.createServer(app);
 
-  const io = new SocketIOServer(httpServer, {
+export const io = new SocketIOServer(httpServer, {
     cors: {
       origin: "*",
       methods: ["GET", "POST"],
@@ -1055,6 +1054,7 @@ async function startServer() {
   });
 
   // --- Vite Middleware or Static Production Serving ---
+if (process.env.NODE_ENV !== "test") {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },
@@ -1070,11 +1070,8 @@ async function startServer() {
   }
 
   httpServer.listen(PORT, "0.0.0.0", () => {
-    console.log(`[Server] Real-Time Collaborative Server running on http://localhost:${PORT}`);
+    console.log(
+      `[Server] Real-Time Collaborative Server running on http://localhost:${PORT}`
+    );
   });
 }
-
-startServer().catch(err => {
-  console.error("Failed to start server:", err);
-  process.exit(1);
-});
