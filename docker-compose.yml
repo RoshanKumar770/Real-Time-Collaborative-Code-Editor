@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: codesync-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: codesync
+      POSTGRES_USER: codesync
+      POSTGRES_PASSWORD: codesync_dev
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:

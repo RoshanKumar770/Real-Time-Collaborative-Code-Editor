@@ -1,9 +1,22 @@
 import express from "express";
+import "dotenv/config";
 import http from "http";
 import path from "path";
 import { Server as SocketIOServer, Socket } from "socket.io";
 import { createServer as createViteServer } from "vite";
 import vm from "vm";
+import {
+  createRoom,
+  findRoom,
+  findRoomChatMessages,
+  findRoomFiles,
+  findRoomVersionHistory,
+  listRooms,
+  replaceRoomFiles,
+  saveChatMessage,
+  saveVersionSnapshot,
+  updateRoom,
+} from "./src/db/repository";
 
 interface ServerFile {
   id: string;
@@ -195,52 +208,157 @@ print(f"Total metrics processed: {len(metrics.events)}")
 
 const rooms = new Map<string, ServerRoom>();
 
-function getOrCreateRoom(roomId: string, name?: string): ServerRoom {
-  if (!rooms.has(roomId)) {
-    const starterFiles = JSON.parse(JSON.stringify(DEFAULT_STARTER_FILES)) as ServerFile[];
-    const activeFileId = starterFiles[0].id;
-    
-    const initialSnapshot: ServerVersionSnapshot = {
-      id: `ver-${Date.now()}-1`,
-      versionNumber: 1,
-      timestamp: Date.now(),
-      authorName: "System",
-      authorColor: "#6366F1",
-      commitMessage: "Initial project setup & starter files",
-      filesSnapshot: starterFiles.reduce((acc, f) => ({ ...acc, [f.id]: f.content }), {}),
-      fileNames: starterFiles.reduce((acc, f) => ({ ...acc, [f.id]: f.name }), {}),
-      activeFileId,
-      changeSummary: "Project initialized with JavaScript, TypeScript, Python, and CSS workspaces.",
-    };
+async function loadOrCreateRoom(
+  roomId: string,
+  name?: string
+): Promise<ServerRoom> {
+  const cachedRoom = rooms.get(roomId);
 
-    const welcomeMsg: ServerChatMessage = {
-      id: `msg-${Date.now()}`,
-      userId: "system",
-      username: "System",
-      userColor: "#64748B",
-      text: `Room "${roomId}" created. Real-time synchronization active.`,
-      timestamp: Date.now(),
-      type: "system",
-    };
-
-    rooms.set(roomId, {
-      id: roomId,
-      name: name || `Project ${roomId}`,
-      createdAt: Date.now(),
-      files: starterFiles,
-      activeFileId,
-      users: new Map(),
-      versionHistory: [initialSnapshot],
-      chatMessages: [welcomeMsg],
-      syncVersion: 1,
-    });
+  if (cachedRoom) {
+    return cachedRoom;
   }
-  return rooms.get(roomId)!;
+
+  const persistedRoom = await findRoom(roomId);
+
+  if (persistedRoom) {
+    const [persistedFiles, persistedVersions, persistedMessages] =
+      await Promise.all([
+        findRoomFiles(roomId),
+        findRoomVersionHistory(roomId),
+        findRoomChatMessages(roomId, 150),
+      ]);
+
+    const room: ServerRoom = {
+      id: persistedRoom.id,
+      name: persistedRoom.name,
+      createdAt: persistedRoom.createdAt,
+      files: persistedFiles.map((file) => ({
+        id: file.id,
+        name: file.name,
+        language: file.language,
+        content: file.content,
+        version: file.version,
+        lastModifiedBy: file.lastModifiedBy,
+        lastModifiedAt: file.lastModifiedAt,
+      })),
+      activeFileId: persistedRoom.activeFileId,
+      users: new Map(),
+      versionHistory: persistedVersions.map((snapshot) => ({
+        id: snapshot.id,
+        versionNumber: snapshot.versionNumber,
+        timestamp: snapshot.timestamp,
+        authorName: snapshot.authorName,
+        authorColor: snapshot.authorColor,
+        commitMessage: snapshot.commitMessage,
+        filesSnapshot: snapshot.filesSnapshot,
+        fileNames: snapshot.fileNames,
+        activeFileId: snapshot.activeFileId,
+        changeSummary: snapshot.changeSummary,
+      })),
+      chatMessages: persistedMessages.map((message) => ({
+        id: message.id,
+        userId: message.userId,
+        username: message.username,
+        userColor: message.userColor,
+        text: message.text,
+        timestamp: message.timestamp,
+        type: message.type,
+      })),
+      syncVersion: persistedRoom.syncVersion,
+    };
+
+    rooms.set(roomId, room);
+
+    return room;
+  }
+
+  const starterFiles = JSON.parse(
+    JSON.stringify(DEFAULT_STARTER_FILES)
+  ) as ServerFile[];
+
+  const activeFileId = starterFiles[0].id;
+  const now = Date.now();
+  const roomName = name || `Project ${roomId}`;
+
+  const initialSnapshot: ServerVersionSnapshot = {
+    id: `ver-${now}-1`,
+    versionNumber: 1,
+    timestamp: now,
+    authorName: "System",
+    authorColor: "#6366F1",
+    commitMessage: "Initial project setup & starter files",
+    filesSnapshot: starterFiles.reduce(
+      (acc, f) => ({ ...acc, [f.id]: f.content }),
+      {}
+    ),
+    fileNames: starterFiles.reduce(
+      (acc, f) => ({ ...acc, [f.id]: f.name }),
+      {}
+    ),
+    activeFileId,
+    changeSummary:
+      "Project initialized with JavaScript, TypeScript, Python, and CSS workspaces.",
+  };
+
+  const welcomeMsg: ServerChatMessage = {
+    id: `msg-${now}`,
+    userId: "system",
+    username: "System",
+    userColor: "#64748B",
+    text: `Room "${roomId}" created. Real-time synchronization active.`,
+    timestamp: now,
+    type: "system",
+  };
+
+  const room: ServerRoom = {
+    id: roomId,
+    name: roomName,
+    createdAt: now,
+    files: starterFiles,
+    activeFileId,
+    users: new Map(),
+    versionHistory: [initialSnapshot],
+    chatMessages: [welcomeMsg],
+    syncVersion: 1,
+  };
+
+  await createRoom({
+    id: room.id,
+    name: room.name,
+    createdAt: room.createdAt,
+    activeFileId: room.activeFileId,
+    syncVersion: room.syncVersion,
+  });
+
+await replaceRoomFiles(
+  room.id,
+  room.files.map((file) => ({
+    ...file,
+    roomId: room.id,
+  }))
+);  await saveVersionSnapshot({
+    ...initialSnapshot,
+    roomId: room.id,
+  });
+  await saveChatMessage({
+    ...welcomeMsg,
+    roomId: room.id,
+  });
+
+  rooms.set(roomId, room);
+
+  return room;
 }
 
-// Pre-populate default room
-getOrCreateRoom("global-workspace", "Global Workspace");
-getOrCreateRoom("algos-lab", "Algorithm & Data Structures Lab");
+async function initializeDefaultRooms() {
+  await loadOrCreateRoom("global-workspace", "Global Workspace");
+  await loadOrCreateRoom(
+    "algos-lab",
+    "Algorithm & Data Structures Lab"
+  );
+
+  console.log("[Database] Default rooms initialized");
+}
 
 export const app = express();
 const PORT = 3000;
@@ -257,72 +375,183 @@ export const io = new SocketIOServer(httpServer, {
   app.use(express.json({ limit: "10mb" }));
 
   // --- REST APIs ---
-  app.get("/api/health", (req, res) => {
+  app.get("/api/health", async (req, res) => {
+  try {
+    const persistedRooms = await listRooms();
+
     let totalConnected = 0;
-    rooms.forEach(r => {
-      totalConnected += r.users.size;
+    rooms.forEach((room) => {
+      totalConnected += room.users.size;
     });
 
     res.json({
       status: "ok",
       serverTime: Date.now(),
       uptimeSeconds: Math.floor(process.uptime()),
-      activeRooms: rooms.size,
+      activeRooms: persistedRooms.length,
       activeUsers: totalConnected,
       version: "1.0.0",
     });
-  });
+  } catch (error) {
+    console.error("[Database] Health check failed:", error);
 
-  app.get("/api/rooms", (req, res) => {
-    const roomList = Array.from(rooms.values()).map(r => ({
-      id: r.id,
-      name: r.name,
-      createdAt: r.createdAt,
-      userCount: r.users.size,
-      fileCount: r.files.length,
-      versionCount: r.versionHistory.length,
-      latestVersion: r.versionHistory[r.versionHistory.length - 1]?.versionNumber || 1,
-      users: Array.from(r.users.values()).map(u => ({
-        id: u.id,
-        username: u.username,
-        color: u.color,
-      })),
-    }));
-    res.json({ rooms: roomList });
-  });
-
-  app.get("/api/rooms/:id", (req, res) => {
-    const room = rooms.get(req.params.id);
-    if (!room) {
-      return res.status(404).json({ error: "Room not found" });
-    }
-    res.json({
-      id: room.id,
-      name: room.name,
-      createdAt: room.createdAt,
-      activeFileId: room.activeFileId,
-      files: room.files.map(f => ({
-        id: f.id,
-        name: f.name,
-        language: f.language,
-        version: f.version,
-        contentLength: f.content.length,
-      })),
-      versionHistory: room.versionHistory,
-      userCount: room.users.size,
+    res.status(503).json({
+      status: "error",
+      error: "Database unavailable",
     });
-  });
+  }
+});
 
-  app.post("/api/rooms", (req, res) => {
+
+app.get("/api/rooms", async (req, res) => {
+  try {
+    const persistedRooms = await listRooms();
+
+    const roomList = await Promise.all(
+      persistedRooms.map(async (persistedRoom) => {
+        const cachedRoom = rooms.get(persistedRoom.id);
+
+        if (cachedRoom) {
+          return {
+            id: cachedRoom.id,
+            name: cachedRoom.name,
+            createdAt: cachedRoom.createdAt,
+            userCount: cachedRoom.users.size,
+            fileCount: cachedRoom.files.length,
+            versionCount: cachedRoom.versionHistory.length,
+            latestVersion:
+              cachedRoom.versionHistory[
+                cachedRoom.versionHistory.length - 1
+              ]?.versionNumber || 1,
+            users: Array.from(cachedRoom.users.values()).map((user) => ({
+              id: user.id,
+              username: user.username,
+              color: user.color,
+            })),
+          };
+        }
+
+        const [files, versionHistory] = await Promise.all([
+          findRoomFiles(persistedRoom.id),
+          findRoomVersionHistory(persistedRoom.id),
+        ]);
+
+        return {
+          id: persistedRoom.id,
+          name: persistedRoom.name,
+          createdAt: persistedRoom.createdAt,
+          userCount: 0,
+          fileCount: files.length,
+          versionCount: versionHistory.length,
+          latestVersion:
+            versionHistory[versionHistory.length - 1]?.versionNumber || 1,
+          users: [],
+        };
+      })
+    );
+
+    return res.json({ rooms: roomList });
+  } catch (error) {
+    console.error("[Database] Failed to list rooms:", error);
+
+    return res.status(500).json({
+      error: "Failed to load rooms",
+    });
+  }
+});
+
+// Get a single persisted room
+app.get("/api/rooms/:id", async (req, res) => {
+  try {
+    const roomId = req.params.id;
+
+    const persistedRoom = await findRoom(roomId);
+
+    if (!persistedRoom) {
+      return res.status(404).json({
+        error: "Room not found",
+      });
+    }
+
+    const cachedRoom = rooms.get(roomId);
+
+    if (cachedRoom) {
+      return res.json({
+        id: cachedRoom.id,
+        name: cachedRoom.name,
+        createdAt: cachedRoom.createdAt,
+        activeFileId: cachedRoom.activeFileId,
+        files: cachedRoom.files.map((file) => ({
+          id: file.id,
+          name: file.name,
+          language: file.language,
+          version: file.version,
+          contentLength: file.content.length,
+        })),
+        versionHistory: cachedRoom.versionHistory,
+        userCount: cachedRoom.users.size,
+      });
+    }
+
+    const [files, versionHistory] = await Promise.all([
+      findRoomFiles(roomId),
+      findRoomVersionHistory(roomId),
+    ]);
+
+    return res.json({
+      id: persistedRoom.id,
+      name: persistedRoom.name,
+      createdAt: persistedRoom.createdAt,
+      activeFileId: persistedRoom.activeFileId,
+      files: files.map((file) => ({
+        id: file.id,
+        name: file.name,
+        language: file.language,
+        version: file.version,
+        contentLength: file.content.length,
+      })),
+      versionHistory,
+      userCount: 0,
+    });
+  } catch (error) {
+    console.error("[Database] Failed to load room:", error);
+
+    return res.status(500).json({
+      error: "Failed to load room",
+    });
+  }
+});
+
+// Create a new room
+app.post("/api/rooms", async (req, res) => {
+  try {
     const { id, name } = req.body;
-    const roomId = (id || `room-${Date.now().toString(36)}`).trim().toLowerCase().replace(/[^a-z0-9-_]/g, "");
-    const room = getOrCreateRoom(roomId, name || `Workspace ${roomId}`);
-    res.json({
+
+    const roomId = (
+      id || `room-${Date.now().toString(36)}`
+    )
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9-_]/g, "");
+
+    const room = await loadOrCreateRoom(
+      roomId,
+      name || `Workspace ${roomId}`
+    );
+
+    return res.json({
       id: room.id,
       name: room.name,
       fileCount: room.files.length,
     });
-  });
+  } catch (error) {
+    console.error("[Database] Failed to create room:", error);
+
+    return res.status(500).json({
+      error: "Failed to create room",
+    });
+  }
+});
 
   // Code Execution Engine (Safe sandboxed VM for JS/TS)
   app.post("/api/execute", (req, res) => {
@@ -551,8 +780,7 @@ export const io = new SocketIOServer(httpServer, {
     let currentUser: ServerUser | null = null;
 
     // Join room event
-    socket.on("room:join", ({ roomId, username, userColor, activeFileId }: {
-      roomId: string;
+    socket.on("room:join", async ({ roomId, username, userColor, activeFileId }: {      roomId: string;
       username: string;
       userColor: string;
       activeFileId?: string;
@@ -561,8 +789,7 @@ export const io = new SocketIOServer(httpServer, {
       currentRoomId = cleanRoomId;
       socket.join(cleanRoomId);
 
-      const room = getOrCreateRoom(cleanRoomId);
-      const chosenFileId = activeFileId || room.activeFileId || room.files[0]?.id || "";
+      const room = await loadOrCreateRoom(cleanRoomId);      const chosenFileId = activeFileId || room.activeFileId || room.files[0]?.id || "";
 
       currentUser = {
         id: `user-${socket.id.substring(0, 6)}`,
@@ -613,102 +840,160 @@ export const io = new SocketIOServer(httpServer, {
     });
 
     // Real-Time Code Change
-    socket.on("code:change", ({ roomId, fileId, content, clientVersion, changeOrigin }: {
-      roomId: string;
-      fileId: string;
-      content: string;
-      clientVersion: number;
-      changeOrigin?: string;
-    }) => {
-      const targetRoomId = roomId || currentRoomId;
-      if (!targetRoomId) return;
-      const room = rooms.get(targetRoomId);
-      if (!room) return;
+socket.on("code:change", async ({ roomId, fileId, content, clientVersion, changeOrigin }: {
+  roomId: string;
+  fileId: string;
+  content: string;
+  clientVersion: number;
+  changeOrigin?: string;
+}) => {
+  const targetRoomId = roomId || currentRoomId;
+  if (!targetRoomId) return;
 
-      const file = room.files.find(f => f.id === fileId);
-      if (!file) return;
+  const room = rooms.get(targetRoomId);
+  if (!room) return;
 
-      // Update authoritative content & increment version
-      file.content = content;
-      file.version += 1;
-      file.lastModifiedBy = currentUser?.username || "Collaborator";
-      file.lastModifiedAt = Date.now();
-      room.syncVersion += 1;
+  const file = room.files.find(f => f.id === fileId);
+  if (!file) return;
 
-      if (currentUser) {
-        currentUser.lastActive = Date.now();
-      }
+  const modifiedBy = currentUser?.username || "Collaborator";
+  const modifiedAt = Date.now();
 
-      // Broadcast update to all other clients in room
-      socket.to(targetRoomId).emit("code:update", {
-        fileId,
-        content,
-        version: file.version,
-        syncVersion: room.syncVersion,
-        authorSocketId: socket.id,
-        authorName: currentUser?.username || "Collaborator",
-        authorColor: currentUser?.color || "#3B82F6",
-        changeOrigin,
-      });
-    });
+  // Update authoritative in-memory state
+  file.content = content;
+  file.version += 1;
+  file.lastModifiedBy = modifiedBy;
+  file.lastModifiedAt = modifiedAt;
+  room.syncVersion += 1;
 
-    // Real-Time CRDT Operations (Conflict-free Replicated Data Type)
-    socket.on("crdt:ops", ({ roomId, fileId, ops, content, clientVersion, peerId, clock, changeOrigin }: {
-      roomId: string;
-      fileId: string;
-      ops: any[];
-      content: string;
-      clientVersion: number;
-      peerId?: string;
-      clock?: number;
-      changeOrigin?: string;
-    }) => {
-      const targetRoomId = roomId || currentRoomId;
-      if (!targetRoomId) return;
-      const room = rooms.get(targetRoomId);
-      if (!room) return;
+  if (currentUser) {
+    currentUser.lastActive = modifiedAt;
+  }
 
-      const file = room.files.find(f => f.id === fileId);
-      if (!file) return;
+  // Persist the changed file and room sync state
+  try {
+    await replaceRoomFiles(
+      room.id,
+      room.files.map((roomFile) => ({
+        id: roomFile.id,
+        roomId: room.id,
+        name: roomFile.name,
+        language: roomFile.language,
+        content: roomFile.content,
+        version: roomFile.version,
+        lastModifiedBy: roomFile.lastModifiedBy,
+        lastModifiedAt: roomFile.lastModifiedAt,
+      }))
+    );
 
-      // Update authoritative content & increment version
-      file.content = content;
-      file.version += 1;
-      file.lastModifiedBy = currentUser?.username || "Collaborator";
-      file.lastModifiedAt = Date.now();
-      room.syncVersion += 1;
+    await updateRoom(
+      room.id,
+      room.activeFileId,
+      room.syncVersion
+    );
+  } catch (error) {
+    console.error("[Database] Failed to persist code change:", error);
+  }
 
-      if (currentUser) {
-        currentUser.lastActive = Date.now();
-      }
+  // Broadcast update to all other clients in room
+  socket.to(targetRoomId).emit("code:update", {
+    fileId,
+    content,
+    version: file.version,
+    syncVersion: room.syncVersion,
+    authorSocketId: socket.id,
+    authorName: modifiedBy,
+    authorColor: currentUser?.color || "#3B82F6",
+    changeOrigin,
+  });
+});
 
-      // Broadcast CRDT operations to other peers in room for conflict-free resolution
-      socket.to(targetRoomId).emit("crdt:ops", {
-        fileId,
-        ops,
-        content,
-        version: file.version,
-        syncVersion: room.syncVersion,
-        authorSocketId: socket.id,
-        authorName: currentUser?.username || "Collaborator",
-        authorColor: currentUser?.color || "#3B82F6",
-        peerId,
-        clock,
-        changeOrigin,
-      });
+  // Real-Time CRDT Operations (Conflict-free Replicated Data Type)
+socket.on("crdt:ops", async ({ roomId, fileId, ops, content, clientVersion, peerId, clock, changeOrigin }: {
+  roomId: string;
+  fileId: string;
+  ops: any[];
+  content: string;
+  clientVersion: number;
+  peerId?: string;
+  clock?: number;
+  changeOrigin?: string;
+}) => {
+  const targetRoomId = roomId || currentRoomId;
+  if (!targetRoomId) return;
 
-      // Also broadcast code:update for full consistency
-      socket.to(targetRoomId).emit("code:update", {
-        fileId,
-        content,
-        version: file.version,
-        syncVersion: room.syncVersion,
-        authorSocketId: socket.id,
-        authorName: currentUser?.username || "Collaborator",
-        authorColor: currentUser?.color || "#3B82F6",
-        changeOrigin,
-      });
-    });
+  const room = rooms.get(targetRoomId);
+  if (!room) return;
+
+  const file = room.files.find(f => f.id === fileId);
+  if (!file) return;
+
+  const modifiedBy = currentUser?.username || "Collaborator";
+  const modifiedAt = Date.now();
+
+  // Update authoritative in-memory state
+  file.content = content;
+  file.version += 1;
+  file.lastModifiedBy = modifiedBy;
+  file.lastModifiedAt = modifiedAt;
+  room.syncVersion += 1;
+
+  if (currentUser) {
+    currentUser.lastActive = modifiedAt;
+  }
+
+  // Persist CRDT result to PostgreSQL
+  try {
+    await replaceRoomFiles(
+      room.id,
+      room.files.map((roomFile) => ({
+        id: roomFile.id,
+        roomId: room.id,
+        name: roomFile.name,
+        language: roomFile.language,
+        content: roomFile.content,
+        version: roomFile.version,
+        lastModifiedBy: roomFile.lastModifiedBy,
+        lastModifiedAt: roomFile.lastModifiedAt,
+      }))
+    );
+
+    await updateRoom(
+      room.id,
+      room.activeFileId,
+      room.syncVersion
+    );
+  } catch (error) {
+    console.error("[Database] Failed to persist CRDT change:", error);
+  }
+
+  // Broadcast CRDT operations to other peers
+  socket.to(targetRoomId).emit("crdt:ops", {
+    fileId,
+    ops,
+    content,
+    version: file.version,
+    syncVersion: room.syncVersion,
+    authorSocketId: socket.id,
+    authorName: modifiedBy,
+    authorColor: currentUser?.color || "#3B82F6",
+    peerId,
+    clock,
+    changeOrigin,
+  });
+
+  // Also broadcast code:update for full consistency
+  socket.to(targetRoomId).emit("code:update", {
+    fileId,
+    content,
+    version: file.version,
+    syncVersion: room.syncVersion,
+    authorSocketId: socket.id,
+    authorName: modifiedBy,
+    authorColor: currentUser?.color || "#3B82F6",
+    changeOrigin,
+  });
+});
 
     // Cursor & Selection movement
     socket.on("cursor:move", ({ roomId, fileId, cursor, selection }: {
@@ -778,132 +1063,241 @@ export const io = new SocketIOServer(httpServer, {
     });
 
     // Create new file
-    socket.on("file:create", ({ roomId, name, language, initialContent }: {
-      roomId: string;
-      name: string;
-      language: string;
-      initialContent?: string;
-    }) => {
-      const targetRoomId = roomId || currentRoomId;
-      if (!targetRoomId) return;
-      const room = rooms.get(targetRoomId);
-      if (!room) return;
+   socket.on("file:create", async ({ roomId, name, language, initialContent }: {
+  roomId: string;
+  name: string;
+  language: string;
+  initialContent?: string;
+}) => {
+  const targetRoomId = roomId || currentRoomId;
+  if (!targetRoomId) return;
 
-      const newFile: ServerFile = {
-        id: `file-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-        name: name.trim() || `untitled-${room.files.length + 1}.js`,
-        language: language || "javascript",
-        content: initialContent || `// ${name}\n\n`,
-        version: 1,
-        lastModifiedBy: currentUser?.username || "Collaborator",
-        lastModifiedAt: Date.now(),
-      };
+  const room = rooms.get(targetRoomId);
+  if (!room) return;
 
-      room.files.push(newFile);
-      room.activeFileId = newFile.id;
-      room.syncVersion += 1;
+  const now = Date.now();
 
-      const sysMsg: ServerChatMessage = {
-        id: `msg-${Date.now()}`,
-        userId: "system",
-        username: "System",
-        userColor: "#64748B",
-        text: `${currentUser?.username || "A user"} created file "${newFile.name}".`,
-        timestamp: Date.now(),
-        type: "system",
-      };
-      room.chatMessages.push(sysMsg);
+  const newFile: ServerFile = {
+    id: `file-${now}-${Math.random().toString(36).substring(2, 6)}`,
+    name: name.trim() || `untitled-${room.files.length + 1}.js`,
+    language: language || "javascript",
+    content: initialContent || `// ${name}\n\n`,
+    version: 1,
+    lastModifiedBy: currentUser?.username || "Collaborator",
+    lastModifiedAt: now,
+  };
 
-      io.to(targetRoomId).emit("file:created", {
-        file: newFile,
-        activeFileId: newFile.id,
-        files: room.files,
-      });
-      io.to(targetRoomId).emit("chat:message", sysMsg);
+  room.files.push(newFile);
+  room.activeFileId = newFile.id;
+  room.syncVersion += 1;
+
+  const sysMsg: ServerChatMessage = {
+    id: `msg-${now}`,
+    userId: "system",
+    username: "System",
+    userColor: "#64748B",
+    text: `${currentUser?.username || "A user"} created file "${newFile.name}".`,
+    timestamp: now,
+    type: "system",
+  };
+
+  room.chatMessages.push(sysMsg);
+
+  try {
+    await replaceRoomFiles(
+      room.id,
+      room.files.map((file) => ({
+        id: file.id,
+        roomId: room.id,
+        name: file.name,
+        language: file.language,
+        content: file.content,
+        version: file.version,
+        lastModifiedBy: file.lastModifiedBy,
+        lastModifiedAt: file.lastModifiedAt,
+      }))
+    );
+
+    await updateRoom(
+      room.id,
+      room.activeFileId,
+      room.syncVersion
+    );
+
+    await saveChatMessage({
+      ...sysMsg,
+      roomId: room.id,
     });
+  } catch (error) {
+    console.error("[Database] Failed to persist file creation:", error);
+  }
+
+  io.to(targetRoomId).emit("file:created", {
+    file: newFile,
+    activeFileId: newFile.id,
+    files: room.files,
+  });
+
+  io.to(targetRoomId).emit("chat:message", sysMsg);
+});
 
     // Delete file
-    socket.on("file:delete", ({ roomId, fileId }: { roomId: string; fileId: string }) => {
-      const targetRoomId = roomId || currentRoomId;
-      if (!targetRoomId) return;
-      const room = rooms.get(targetRoomId);
-      if (!room || room.files.length <= 1) return; // Keep at least one file
+    socket.on("file:delete", async ({ roomId, fileId }: {
+  roomId: string;
+  fileId: string;
+}) => {
+  const targetRoomId = roomId || currentRoomId;
+  if (!targetRoomId) return;
 
-      const fileIndex = room.files.findIndex(f => f.id === fileId);
-      if (fileIndex === -1) return;
+  const room = rooms.get(targetRoomId);
+  if (!room || room.files.length <= 1) return;
 
-      const deletedFile = room.files[fileIndex];
-      room.files.splice(fileIndex, 1);
-      if (room.activeFileId === fileId) {
-        room.activeFileId = room.files[0]?.id || "";
-      }
-      room.syncVersion += 1;
+  const fileIndex = room.files.findIndex((file) => file.id === fileId);
+  if (fileIndex === -1) return;
 
-      const sysMsg: ServerChatMessage = {
-        id: `msg-${Date.now()}`,
-        userId: "system",
-        username: "System",
-        userColor: "#64748B",
-        text: `${currentUser?.username || "A user"} deleted "${deletedFile.name}".`,
-        timestamp: Date.now(),
-        type: "system",
-      };
-      room.chatMessages.push(sysMsg);
+  const deletedFile = room.files[fileIndex];
 
-      io.to(targetRoomId).emit("file:deleted", {
-        fileId,
-        activeFileId: room.activeFileId,
-        files: room.files,
-      });
-      io.to(targetRoomId).emit("chat:message", sysMsg);
+  room.files.splice(fileIndex, 1);
+
+  if (room.activeFileId === fileId) {
+    room.activeFileId = room.files[0]?.id || "";
+  }
+
+  room.syncVersion += 1;
+
+  const now = Date.now();
+
+  const sysMsg: ServerChatMessage = {
+    id: `msg-${now}`,
+    userId: "system",
+    username: "System",
+    userColor: "#64748B",
+    text: `${currentUser?.username || "A user"} deleted "${deletedFile.name}".`,
+    timestamp: now,
+    type: "system",
+  };
+
+  room.chatMessages.push(sysMsg);
+
+  try {
+    await replaceRoomFiles(
+      room.id,
+      room.files.map((file) => ({
+        id: file.id,
+        roomId: room.id,
+        name: file.name,
+        language: file.language,
+        content: file.content,
+        version: file.version,
+        lastModifiedBy: file.lastModifiedBy,
+        lastModifiedAt: file.lastModifiedAt,
+      }))
+    );
+
+    await updateRoom(
+      room.id,
+      room.activeFileId,
+      room.syncVersion
+    );
+
+    await saveChatMessage({
+      ...sysMsg,
+      roomId: room.id,
     });
+  } catch (error) {
+    console.error("[Database] Failed to persist file deletion:", error);
+  }
 
+  io.to(targetRoomId).emit("file:deleted", {
+    fileId,
+    activeFileId: room.activeFileId,
+    files: room.files,
+  });
+
+  io.to(targetRoomId).emit("chat:message", sysMsg);
+});
     // Rename file
-    socket.on("file:rename", ({ roomId, fileId, newName, newLanguage }: {
-      roomId: string;
-      fileId: string;
-      newName: string;
-      newLanguage?: string;
-    }) => {
-      const targetRoomId = roomId || currentRoomId;
-      if (!targetRoomId) return;
-      const room = rooms.get(targetRoomId);
-      if (!room) return;
+    socket.on("file:rename", async ({ roomId, fileId, newName, newLanguage }: {
+  roomId: string;
+  fileId: string;
+  newName: string;
+  newLanguage?: string;
+}) => {
+  const targetRoomId = roomId || currentRoomId;
+  if (!targetRoomId) return;
 
-      const file = room.files.find(f => f.id === fileId);
-      if (!file) return;
+  const room = rooms.get(targetRoomId);
+  if (!room) return;
 
-      const trimmedName = (newName || "").trim();
-      if (!trimmedName) return;
+  const file = room.files.find((item) => item.id === fileId);
+  if (!file) return;
 
-      const oldName = file.name;
-      file.name = trimmedName;
-      if (newLanguage) {
-        file.language = newLanguage;
-      }
-      file.lastModifiedAt = Date.now();
-      file.lastModifiedBy = currentUser?.username || "Collaborator";
-      room.syncVersion += 1;
+  const trimmedName = (newName || "").trim();
+  if (!trimmedName) return;
 
-      const sysMsg: ServerChatMessage = {
-        id: `msg-${Date.now()}`,
-        userId: "system",
-        username: "System",
-        userColor: "#64748B",
-        text: `${currentUser?.username || "A user"} renamed "${oldName}" to "${trimmedName}".`,
-        timestamp: Date.now(),
-        type: "system",
-      };
-      room.chatMessages.push(sysMsg);
+  const oldName = file.name;
+  const now = Date.now();
 
-      io.to(targetRoomId).emit("file:renamed", {
-        fileId,
-        newName: trimmedName,
-        newLanguage: file.language,
-        files: room.files,
-      });
-      io.to(targetRoomId).emit("chat:message", sysMsg);
+  file.name = trimmedName;
+
+  if (newLanguage) {
+    file.language = newLanguage;
+  }
+
+  file.lastModifiedAt = now;
+  file.lastModifiedBy = currentUser?.username || "Collaborator";
+  room.syncVersion += 1;
+
+  const sysMsg: ServerChatMessage = {
+    id: `msg-${now}`,
+    userId: "system",
+    username: "System",
+    userColor: "#64748B",
+    text: `${currentUser?.username || "A user"} renamed "${oldName}" to "${trimmedName}".`,
+    timestamp: now,
+    type: "system",
+  };
+
+  room.chatMessages.push(sysMsg);
+
+  try {
+    await replaceRoomFiles(
+      room.id,
+      room.files.map((roomFile) => ({
+        id: roomFile.id,
+        roomId: room.id,
+        name: roomFile.name,
+        language: roomFile.language,
+        content: roomFile.content,
+        version: roomFile.version,
+        lastModifiedBy: roomFile.lastModifiedBy,
+        lastModifiedAt: roomFile.lastModifiedAt,
+      }))
+    );
+
+    await updateRoom(
+      room.id,
+      room.activeFileId,
+      room.syncVersion
+    );
+
+    await saveChatMessage({
+      ...sysMsg,
+      roomId: room.id,
     });
+  } catch (error) {
+    console.error("[Database] Failed to persist file rename:", error);
+  }
+
+  io.to(targetRoomId).emit("file:renamed", {
+    fileId,
+    newName: trimmedName,
+    newLanguage: file.language,
+    files: room.files,
+  });
+
+  io.to(targetRoomId).emit("chat:message", sysMsg);
+});
 
     // Switch active file
     socket.on("file:switch", ({ roomId, fileId }: { roomId: string; fileId: string }) => {
@@ -1053,7 +1447,7 @@ export const io = new SocketIOServer(httpServer, {
     });
   });
 
-  // --- Vite Middleware or Static Production Serving ---
+// --- Vite Middleware or Static Production Serving ---
 if (process.env.NODE_ENV !== "test") {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -1068,6 +1462,8 @@ if (process.env.NODE_ENV !== "test") {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
+
+  await initializeDefaultRooms();
 
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(
