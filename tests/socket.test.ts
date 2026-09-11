@@ -1,6 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { io as createClient, Socket } from "socket.io-client";
 import { httpServer } from "../server";
+import { createToken } from "../src/auth/auth";
+const testToken = createToken({
+  id: "test-user",
+  username: "testuser",
+});
 
 let port: number;
 
@@ -28,6 +33,9 @@ function createTestClient(): Socket {
   return createClient(`http://127.0.0.1:${port}`, {
     transports: ["websocket"],
     forceNew: true,
+    auth: {
+      token: testToken,
+    },
   });
 }
 

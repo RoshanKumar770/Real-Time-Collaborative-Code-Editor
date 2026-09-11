@@ -5,18 +5,29 @@ import path from "path";
 import { Server as SocketIOServer, Socket } from "socket.io";
 import { createServer as createViteServer } from "vite";
 import vm from "vm";
+
 import {
   createRoom,
+  createUser,
   findRoom,
   findRoomChatMessages,
   findRoomFiles,
   findRoomVersionHistory,
+  findUserByUsername,
   listRooms,
   replaceRoomFiles,
   saveChatMessage,
   saveVersionSnapshot,
   updateRoom,
 } from "./src/db/repository";
+
+import {
+  createToken,
+  hashPassword,
+  requireAuth,
+  verifyPassword,
+  verifyToken,
+} from "./src/auth/auth";
 
 interface ServerFile {
   id: string;
@@ -208,7 +219,7 @@ print(f"Total metrics processed: {len(metrics.events)}")
 
 const rooms = new Map<string, ServerRoom>();
 
-async function loadOrCreateRoom(
+export async function loadOrCreateRoom(
   roomId: string,
   name?: string
 ): Promise<ServerRoom> {
@@ -402,9 +413,126 @@ export const io = new SocketIOServer(httpServer, {
   }
 });
 
-
-app.get("/api/rooms", async (req, res) => {
+app.post("/api/auth/register", async (req, res) => {
   try {
+    const { username, password } = req.body;
+
+    if (
+      typeof username !== "string" ||
+      typeof password !== "string"
+    ) {
+      return res.status(400).json({
+        error: "Username and password are required",
+      });
+    }
+
+    const cleanUsername = username.trim();
+
+    if (cleanUsername.length < 3) {
+      return res.status(400).json({
+        error: "Username must be at least 3 characters",
+      });
+    }
+
+    if (password.length < 8) {
+      return res.status(400).json({
+        error: "Password must be at least 8 characters",
+      });
+    }
+
+    const existingUser = await findUserByUsername(cleanUsername);
+
+    if (existingUser) {
+      return res.status(409).json({
+        error: "Username already exists",
+      });
+    }
+
+    const user = {
+      id: `user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      username: cleanUsername,
+      passwordHash: await hashPassword(password),
+      createdAt: Date.now(),
+    };
+
+    await createUser(user);
+
+    const token = createToken({
+      id: user.id,
+      username: user.username,
+    });
+
+    return res.status(201).json({
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+      },
+    });
+  } catch (error) {
+    console.error("[Auth] Registration failed:", error);
+
+    return res.status(500).json({
+      error: "Registration failed",
+    });
+  }
+});
+
+app.post("/api/auth/login", async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    if (
+      typeof username !== "string" ||
+      typeof password !== "string"
+    ) {
+      return res.status(400).json({
+        error: "Username and password are required",
+      });
+    }
+
+    const user = await findUserByUsername(username.trim());
+
+    if (!user) {
+      return res.status(401).json({
+        error: "Invalid username or password",
+      });
+    }
+
+    const validPassword = await verifyPassword(
+      password,
+      user.passwordHash
+    );
+
+    if (!validPassword) {
+      return res.status(401).json({
+        error: "Invalid username or password",
+      });
+    }
+
+    const token = createToken({
+      id: user.id,
+      username: user.username,
+    });
+
+    return res.json({
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+      },
+    });
+  } catch (error) {
+    console.error("[Auth] Login failed:", error);
+
+    return res.status(500).json({
+      error: "Login failed",
+    });
+  }
+});
+
+app.get("/api/rooms", requireAuth, async (req, res) => {
+    try {
     const persistedRooms = await listRooms();
 
     const roomList = await Promise.all(
@@ -461,8 +589,8 @@ app.get("/api/rooms", async (req, res) => {
 });
 
 // Get a single persisted room
-app.get("/api/rooms/:id", async (req, res) => {
-  try {
+app.get("/api/rooms/:id", requireAuth, async (req, res) => {
+    try {
     const roomId = req.params.id;
 
     const persistedRoom = await findRoom(roomId);
@@ -774,8 +902,28 @@ app.post("/api/rooms", async (req, res) => {
     });
   });
 
+  
+
   // --- Socket.IO Real-Time Handlers ---
-  io.on("connection", (socket: Socket) => {
+io.use((socket, next) => {
+  const token = socket.handshake.auth?.token;
+
+  if (!token) {
+    return next(new Error("Authentication required"));
+  }
+
+  try {
+    const user = verifyToken(token);
+
+    socket.data.user = user;
+
+    next();
+  } catch {
+    next(new Error("Invalid or expired token"));
+  }
+});
+
+io.on("connection", (socket) => {
     let currentRoomId: string | null = null;
     let currentUser: ServerUser | null = null;
 

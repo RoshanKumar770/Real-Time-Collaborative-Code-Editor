@@ -1,6 +1,19 @@
-import { describe, expect, it } from "vitest";
-import request from "supertest";
+import { beforeAll, describe, expect, it } from "vitest";import request from "supertest";
 import { app } from "../server";
+import { loadOrCreateRoom } from "../server";
+import { createToken } from "../src/auth/auth";
+
+beforeAll(async () => {
+  await loadOrCreateRoom("global-workspace", "Global Workspace");
+  await loadOrCreateRoom(
+    "algos-lab",
+    "Algorithm & Data Structures Lab"
+  );
+});
+const testToken = createToken({
+  id: "test-user",
+  username: "testuser",
+});
 
 describe("REST API Integration", () => {
   it("GET /api/health returns healthy status", async () => {
@@ -17,6 +30,7 @@ describe("REST API Integration", () => {
   it("GET /api/rooms returns available rooms", async () => {
     const response = await request(app)
       .get("/api/rooms")
+      .set("Authorization", `Bearer ${testToken}`)
       .expect(200);
 
     expect(response.body).toHaveProperty("rooms");
@@ -34,6 +48,7 @@ describe("REST API Integration", () => {
   it("GET /api/rooms/:id returns room details", async () => {
     const response = await request(app)
       .get("/api/rooms/global-workspace")
+      .set("Authorization", `Bearer ${testToken}`)
       .expect(200);
 
     expect(response.body.id).toBe("global-workspace");
@@ -46,6 +61,7 @@ describe("REST API Integration", () => {
   it("GET /api/rooms/:id returns 404 for unknown room", async () => {
     const response = await request(app)
       .get("/api/rooms/does-not-exist")
+      .set("Authorization", `Bearer ${testToken}`)
       .expect(404);
 
     expect(response.body.error).toBe("Room not found");
@@ -147,4 +163,67 @@ describe("REST API Integration", () => {
     expect(response.body.syntaxValid).toBe(false);
     expect(response.body.diagnostics.length).toBeGreaterThan(0);
   });
+  it("registers a new user", async () => {
+  const username = `authuser-${Date.now()}`;
+
+  const response = await request(app)
+    .post("/api/auth/register")
+    .send({
+      username,
+      password: "password123",
+    })
+    .expect(201);
+
+  expect(response.body).toHaveProperty("token");
+  expect(response.body.user.username).toBe(username);
+});
+
+it("logs in an existing user", async () => {
+  const username = `loginuser-${Date.now()}`;
+
+  await request(app)
+    .post("/api/auth/register")
+    .send({
+      username,
+      password: "password123",
+    })
+    .expect(201);
+
+  const response = await request(app)
+    .post("/api/auth/login")
+    .send({
+      username,
+      password: "password123",
+    })
+    .expect(200);
+
+  expect(response.body).toHaveProperty("token");
+  expect(response.body.user.username).toBe(username);
+});
+
+it("rejects protected rooms API without authentication", async () => {
+  await request(app)
+    .get("/api/rooms")
+    .expect(401);
+});
+
+it("rejects login with an incorrect password", async () => {
+  const username = `wrongpass-${Date.now()}`;
+
+  await request(app)
+    .post("/api/auth/register")
+    .send({
+      username,
+      password: "password123",
+    })
+    .expect(201);
+
+  await request(app)
+    .post("/api/auth/login")
+    .send({
+      username,
+      password: "wrong-password",
+    })
+    .expect(401);
+});
 });

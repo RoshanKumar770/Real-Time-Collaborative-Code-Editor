@@ -349,3 +349,54 @@ export async function deleteRoom(roomId: string) {
     [roomId]
   );
 }
+export interface PersistedUser {
+  id: string;
+  username: string;
+  passwordHash: string;
+  createdAt: number;
+}
+
+export async function findUserByUsername(
+  username: string
+): Promise<PersistedUser | null> {
+  const result = await query<PersistedUser>(
+    `
+      SELECT
+        id,
+        username,
+        password_hash AS "passwordHash",
+        created_at AS "createdAt"
+      FROM users
+      WHERE username = $1
+    `,
+    [username]
+  );
+
+  const user = result.rows[0];
+  if (!user) return null;
+
+  return {
+    ...user,
+    createdAt: Number(user.createdAt),
+  };
+}
+
+export async function createUser(user: PersistedUser) {
+  await query(
+    `
+      INSERT INTO users (
+        id,
+        username,
+        password_hash,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4)
+    `,
+    [
+      user.id,
+      user.username,
+      user.passwordHash,
+      user.createdAt,
+    ]
+  );
+}
