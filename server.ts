@@ -7,6 +7,7 @@ import { createServer as createViteServer } from "vite";
 import vm from "vm";
 import { createClient } from "redis";
 import { createAdapter } from "@socket.io/redis-adapter";
+import { initializeDatabase } from "./src/db/database";
 
 import {
   createRoom,
@@ -1643,12 +1644,13 @@ if (process.env.NODE_ENV !== "test") {
     });
   }
 
+  await initializeDatabase();
   await initializeDefaultRooms();
   await initializeRedis();
 
-  httpServer.listen(PORT, "0.0.0.0", () => {
-    console.log(
-      "[Server] Real-Time Collaborative Server running on http://localhost:3000"
-    );
-  });
+httpServer.listen(PORT, "0.0.0.0", () => {
+  console.log(
+    `[Server] Real-Time Collaborative Server running on http://localhost:3000`
+  );
+});
 }
