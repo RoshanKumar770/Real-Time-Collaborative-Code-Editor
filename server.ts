@@ -5,6 +5,8 @@ import path from "path";
 import { Server as SocketIOServer, Socket } from "socket.io";
 import { createServer as createViteServer } from "vite";
 import vm from "vm";
+import { createClient } from "redis";
+import { createAdapter } from "@socket.io/redis-adapter";
 
 import {
   createRoom,
@@ -386,7 +388,7 @@ export const io = new SocketIOServer(httpServer, {
   app.use(express.json({ limit: "10mb" }));
 
   // --- REST APIs ---
-  app.get("/api/health", async (req, res) => {
+app.get("/api/health", async (req, res) => {
   try {
     const persistedRooms = await listRooms();
 
@@ -412,6 +414,33 @@ export const io = new SocketIOServer(httpServer, {
     });
   }
 });
+
+const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
+
+const pubClient = createClient({
+  url: redisUrl,
+});
+
+const subClient = pubClient.duplicate();
+
+pubClient.on("error", (error) => {
+  console.error("[Redis] Publisher error:", error);
+});
+
+subClient.on("error", (error) => {
+  console.error("[Redis] Subscriber error:", error);
+});
+
+async function initializeRedis() {
+  await Promise.all([
+    pubClient.connect(),
+    subClient.connect(),
+  ]);
+
+  io.adapter(createAdapter(pubClient, subClient));
+
+  console.log("[Redis] Socket.IO adapter initialized");
+}
 
 app.post("/api/auth/register", async (req, res) => {
   try {
@@ -1602,20 +1631,24 @@ if (process.env.NODE_ENV !== "test") {
       server: { middlewareMode: true },
       appType: "spa",
     });
+
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
+
     app.use(express.static(distPath));
+
     app.get("*", (req, res) => {
       res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
   await initializeDefaultRooms();
+  await initializeRedis();
 
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(
-      `[Server] Real-Time Collaborative Server running on http://localhost:${PORT}`
+      "[Server] Real-Time Collaborative Server running on http://localhost:3000"
     );
   });
 }
