@@ -127,8 +127,8 @@ export async function replaceRoomFiles(
           file.language,
           file.content,
           file.version,
-          file.lastModifiedBy ?? null,
-          file.lastModifiedAt ?? null,
+          file.lastModifiedBy,
+          file.lastModifiedAt,
         ]
       );
     }
