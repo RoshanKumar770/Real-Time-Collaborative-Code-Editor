@@ -10,6 +10,25 @@ jobs:
   test-and-build:
     runs-on: ubuntu-latest
 
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: codesync
+          POSTGRES_USER: codesync
+          POSTGRES_PASSWORD: codesync_ci
+        ports:
+          - 5433:5432
+        options: >-
+          --health-cmd "pg_isready -U codesync -d codesync"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://codesync:codesync_ci@localhost:5433/codesync
+      JWT_SECRET: test-ci-secret-for-github-actions
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -22,6 +41,9 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Initialize database
+        run: npx tsx src/db/init.ts
 
       - name: Lint
         run: npm run lint
