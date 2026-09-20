@@ -1008,7 +1008,15 @@ io.on("connection", (socket) => {
     currentRoomId = cleanRoomId;
     socket.join(cleanRoomId);
 
-    const room = await loadOrCreateRoom(cleanRoomId); const chosenFileId = activeFileId || room.activeFileId || room.files[0]?.id || "";
+    const room = await loadOrCreateRoom(
+      cleanRoomId,
+      cleanRoomId === "global-workspace"
+        ? "Global Workspace"
+        : cleanRoomId === "algos-lab"
+          ? "Algorithm & Data Structures Lab"
+          : undefined
+    );
+    const chosenFileId = activeFileId || room.activeFileId || room.files[0]?.id || "";
 
     currentUser = {
       id: `user-${socket.id.substring(0, 6)}`,
