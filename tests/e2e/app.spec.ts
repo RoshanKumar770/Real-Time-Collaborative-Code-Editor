@@ -1,5 +1,20 @@
 import { test, expect } from "@playwright/test";
 
+test("reports healthy server dependencies", async ({ request }) => {
+  const response = await request.get("/api/health");
+
+  expect(response.status()).toBe(200);
+
+  const data = await response.json();
+
+  expect(data.status).toBe("ok");
+  expect(data.dependencies.database).toBe("ok");
+  expect(data.dependencies.redis).toBe("ok");
+  expect(data.uptimeSeconds).toBeGreaterThanOrEqual(0);
+  expect(data.activeRooms).toBeGreaterThanOrEqual(0);
+  expect(data.activeUsers).toBeGreaterThanOrEqual(0);
+});
+
 test.describe("CodeSync.io E2E", () => {
   test("loads the collaborative workspace", async ({ page }) => {
     await page.goto("/?room=e2e-workspace");

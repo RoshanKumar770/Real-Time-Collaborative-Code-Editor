@@ -244,7 +244,7 @@ export async function loadOrCreateRoom(
 
     const room: ServerRoom = {
       id: persistedRoom.id,
-      name: persistedRoom.name,
+      name: name || persistedRoom.name,
       createdAt: persistedRoom.createdAt,
       files: persistedFiles.map((file) => ({
         id: file.id,
@@ -390,34 +390,63 @@ export const io = new SocketIOServer(httpServer, {
 
 app.use(express.json({ limit: "10mb" }));
 
-// --- REST APIs ---
-app.get("/api/health", async (req, res) => {
-  try {
-    const persistedRooms = await listRooms();
+app.use((req, res, next) => {
+  const startedAt = Date.now();
 
-    let totalConnected = 0;
-    rooms.forEach((room) => {
-      totalConnected += room.users.size;
-    });
+  res.on("finish", () => {
+    const durationMs = Date.now() - startedAt;
 
-    res.json({
-      status: "ok",
-      serverTime: Date.now(),
-      uptimeSeconds: Math.floor(process.uptime()),
-      activeRooms: persistedRooms.length,
-      activeUsers: totalConnected,
-      version: "1.0.0",
-    });
-  } catch (error) {
-    console.error("[Database] Health check failed:", error);
+    console.log(
+      `[HTTP] ${req.method} ${req.originalUrl} ${res.statusCode} ${durationMs}ms`
+    );
+  });
 
-    res.status(503).json({
-      status: "error",
-      error: "Database unavailable",
-    });
-  }
+  next();
 });
 
+// --- REST APIs ---
+app.get("/api/health", async (_req, res) => {
+  let databaseStatus = "ok";
+  let redisStatus = "ok";
+  let persistedRoomCount: number | null = null;
+
+  try {
+    const persistedRooms = await listRooms();
+    persistedRoomCount = persistedRooms.length;
+  } catch (error) {
+    databaseStatus = "error";
+    console.error("[Health] PostgreSQL check failed:", error);
+  }
+
+  try {
+    await pubClient.ping();
+  } catch (error) {
+    redisStatus = "error";
+    console.error("[Health] Redis check failed:", error);
+  }
+
+  const healthy = databaseStatus === "ok" && redisStatus === "ok";
+
+  let activeUsers = 0;
+
+  rooms.forEach((room) => {
+    activeUsers += room.users.size;
+  });
+
+  return res.status(healthy ? 200 : 503).json({
+    status: healthy ? "ok" : "degraded",
+    serverTime: Date.now(),
+    uptimeSeconds: Math.floor(process.uptime()),
+    version: "1.0.0",
+    dependencies: {
+      database: databaseStatus,
+      redis: redisStatus,
+    },
+    activeRooms: rooms.size,
+    persistedRooms: persistedRoomCount,
+    activeUsers,
+  });
+});
 const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
 
 const pubClient = createClient({
@@ -434,7 +463,7 @@ subClient.on("error", (error) => {
   console.error("[Redis] Subscriber error:", error);
 });
 
-async function initializeRedis() {
+export async function initializeRedis() {
   await Promise.all([
     pubClient.connect(),
     subClient.connect(),
