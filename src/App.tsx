@@ -1,13 +1,13 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import { socketService } from "./services/socket";
-import { 
-  UserPresence, 
-  CodeFile, 
-  VersionSnapshot, 
-  ChatMessage, 
-  ExecutionResult, 
+import {
+  UserPresence,
+  CodeFile,
+  VersionSnapshot,
+  ChatMessage,
+  ExecutionResult,
   CodeAnalysis,
-  SupportedLanguage 
+  SupportedLanguage
 } from "./types";
 import { CRDTOperation } from "./utils/crdt";
 import { Navbar } from "./components/Navbar";
@@ -16,7 +16,7 @@ import { CodeEditor } from "./components/CodeEditor";
 import { VersionHistoryModal } from "./components/VersionHistoryModal";
 import { CollaborationChat } from "./components/CollaborationChat";
 import { TerminalOutput } from "./components/TerminalOutput";
-import { RoomModal } from "./components/RoomModal";
+import RoomModal from "./components/RoomModal";
 import { SimulateCollaboratorModal } from "./components/SimulateCollaboratorModal";
 
 const USER_COLORS = [
@@ -39,6 +39,7 @@ export default function App() {
 
   // User identity
   const [currentUser, setCurrentUser] = useState<UserPresence | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [users, setUsers] = useState<UserPresence[]>([]);
 
   // Files & Editor state
@@ -76,54 +77,141 @@ export default function App() {
 
   // Periodic ticker to smoothly update elapsed time / expire editing badges
   const [, setTicker] = useState(0);
+
+  // Refs
+  const prettifyActiveFileRef = useRef<(() => Promise<void>) | null>(null);
+  const lastCursorEmitRef = useRef<number>(0);
+
+  // Active file derived
+  const activeFile = files.find((f: { id: any }) => f.id === activeFileId) || files[0] || null;
+
   useEffect(() => {
     const interval = setInterval(() => {
-      setTicker((t) => t + 1);
+      setTicker((t: number) => t + 1);
     }, 2500);
+
     return () => clearInterval(interval);
   }, []);
 
-  // Active file derived
-  const activeFile = files.find((f) => f.id === activeFileId) || files[0] || null;
-  const prettifyActiveFileRef = useRef<(() => Promise<void>) | null>(null);
-
-  // Initialize identity once
+  // Initialize authenticated identity once
   useEffect(() => {
-    const storedUsername = sessionStorage.getItem("collab_user_name");
-    const storedColor = sessionStorage.getItem("collab_user_color");
+    let cancelled = false;
 
-    const username = storedUsername || `Dev_${Math.floor(1000 + Math.random() * 9000)}`;
-    const color = storedColor || USER_COLORS[Math.floor(Math.random() * USER_COLORS.length)];
+    const initializeUser = async () => {
+      const storedUsername = sessionStorage.getItem("collab_user_name");
+      const storedColor = sessionStorage.getItem("collab_user_color");
+      const storedToken = sessionStorage.getItem("auth_token");
+      const storedUserId = sessionStorage.getItem("auth_user_id");
 
-    sessionStorage.setItem("collab_user_name", username);
-    sessionStorage.setItem("collab_user_color", color);
+      const username =
+        storedUsername ||
+        `Dev_${Date.now()}_${crypto.randomUUID().slice(0, 8)}`;
 
-    setCurrentUser({
-      id: `user-${Math.random().toString(36).substring(2, 8)}`,
-      socketId: "",
-      username,
-      color,
-      activeFileId: "",
-      lastActive: Date.now(),
-    });
+      const color =
+        storedColor ||
+        USER_COLORS[Math.floor(Math.random() * USER_COLORS.length)];
+
+      sessionStorage.setItem("collab_user_name", username);
+      sessionStorage.setItem("collab_user_color", color);
+
+      let token = storedToken;
+      let userId = storedUserId;
+
+      if (!token || !userId) {
+        let password = sessionStorage.getItem("auth_guest_password");
+
+        if (!password) {
+          password = `Dev_${crypto.randomUUID()}_Secure123!`;
+          sessionStorage.setItem("auth_guest_password", password);
+        }
+
+        try {
+          let response = await fetch("/api/auth/register", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              username,
+              password,
+            }),
+          });
+
+          if (response.status === 409) {
+            response = await fetch("/api/auth/login", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                username,
+                password,
+              }),
+            });
+          }
+
+          if (!response.ok) {
+            throw new Error(
+              `Guest authentication failed: ${response.status}`
+            );
+          }
+
+          const data = await response.json();
+
+          token = data.token;
+          userId = data.user.id;
+
+          sessionStorage.setItem("auth_token", token);
+          sessionStorage.setItem("auth_user_id", userId);
+        } catch (error) {
+          console.error("[Auth] Guest authentication failed:", error);
+
+          if (!cancelled) {
+            setAuthReady(true);
+          }
+
+          return;
+        }
+      }
+
+      if (cancelled) return;
+
+      setCurrentUser({
+        id: userId!,
+        socketId: "",
+        username,
+        color,
+        activeFileId: "",
+        lastActive: Date.now(),
+      });
+
+      setAuthReady(true);
+    };
+
+    initializeUser();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
-
   // Connect and bind socket listeners when roomId or currentUser is ready
   useEffect(() => {
     if (!currentUser) return;
 
-    const socket = socketService.connect();
-
     const handleConnect = () => {
       setIsConnected(true);
-      socketService.joinRoom(roomId, currentUser.username, currentUser.color, activeFileId);
+      socketService.joinRoom(
+        roomId,
+        currentUser.username,
+        currentUser.color,
+        activeFileId
+      );
     };
 
     const handleDisconnect = () => {
       setIsConnected(false);
     };
 
-    // Room full initial state
     const handleRoomInit = (data: any) => {
       if (data.room) {
         setRoomName(data.room.name);
@@ -131,24 +219,46 @@ export default function App() {
         setActiveFileId(data.room.activeFileId || data.room.files?.[0]?.id || "");
         setUsers(data.room.users || []);
         setVersionHistory(data.room.versionHistory || []);
-        setChatMessages(data.room.chatMessages || []);
+        setChatMessages((prev) => {
+          const serverMessages: ChatMessage[] = data.room.chatMessages || [];
+
+          if (prev.length === 0) {
+            return serverMessages;
+          }
+
+          const merged = [...serverMessages];
+
+          for (const existingMessage of prev) {
+            const alreadyExists = merged.some(
+              (serverMessage) =>
+                serverMessage.id === existingMessage.id ||
+                (
+                  serverMessage.userId === existingMessage.userId &&
+                  serverMessage.text === existingMessage.text
+                )
+            );
+
+            if (!alreadyExists) {
+              merged.push(existingMessage);
+            }
+          }
+
+          return merged;
+        });
       }
       if (data.self) {
         setCurrentUser(data.self);
       }
     };
 
-    // Other user joined
     const handleUserJoined = (data: { user: UserPresence; users: UserPresence[] }) => {
       setUsers(data.users);
     };
 
-    // User left
     const handleUserLeft = (data: { socketId: string; users: UserPresence[] }) => {
       setUsers(data.users);
     };
 
-    // Remote code update
     const handleCodeUpdate = (data: {
       fileId: string;
       content: string;
@@ -157,14 +267,13 @@ export default function App() {
       authorName?: string;
       authorColor?: string;
     }) => {
-      setFiles((prevFiles) =>
-        prevFiles.map((f) =>
+      setFiles((prevFiles: any[]) =>
+        prevFiles.map((f: { id: string }) =>
           f.id === data.fileId ? { ...f, content: data.content, version: data.version } : f
         )
       );
 
-      // Track collaborator actively editing this file
-      setRecentRemoteEdits((prev) => ({
+      setRecentRemoteEdits((prev: any) => ({
         ...prev,
         [data.fileId]: {
           username: data.authorName || "Collaborator",
@@ -174,7 +283,6 @@ export default function App() {
       }));
     };
 
-    // Remote CRDT Operations update
     const handleCRDTOps = (data: {
       fileId: string;
       ops: any[];
@@ -184,13 +292,13 @@ export default function App() {
       authorName?: string;
       authorColor?: string;
     }) => {
-      setFiles((prevFiles) =>
-        prevFiles.map((f) =>
+      setFiles((prevFiles: any[]) =>
+        prevFiles.map((f: { id: string }) =>
           f.id === data.fileId ? { ...f, content: data.content, version: data.version } : f
         )
       );
 
-      setRecentRemoteEdits((prev) => ({
+      setRecentRemoteEdits((prev: any) => ({
         ...prev,
         [data.fileId]: {
           username: data.authorName || "Collaborator",
@@ -200,7 +308,6 @@ export default function App() {
       }));
     };
 
-    // Remote cursor update
     const handleCursorUpdate = (data: {
       socketId: string;
       userId: string;
@@ -210,8 +317,8 @@ export default function App() {
       cursor: any;
       selection: any;
     }) => {
-      setUsers((prevUsers) =>
-        prevUsers.map((u) => {
+      setUsers((prevUsers: any[]) =>
+        prevUsers.map((u: { socketId: string; id: string }) => {
           if (u.socketId === data.socketId || u.id === data.userId) {
             return {
               ...u,
@@ -226,7 +333,7 @@ export default function App() {
       );
 
       if (data.cursor && data.fileId) {
-        setRecentRemoteEdits((prev) => ({
+        setRecentRemoteEdits((prev: any) => ({
           ...prev,
           [data.fileId]: {
             username: data.username,
@@ -237,60 +344,73 @@ export default function App() {
       }
     };
 
-    // Chat message received
     const handleChatMessage = (msg: ChatMessage) => {
-      setChatMessages((prev) => [...prev, msg]);
-      if (!isChatOpen && msg.type === "chat") {
-        setUnreadChatCount((count) => count + 1);
-      }
+
+      setChatMessages((prev) => {
+        // Ignore exact duplicates.
+        if (prev.some((existing) => existing.id === msg.id)) {
+          return prev;
+        }
+
+        // The sender already displayed this message optimistically.
+        // Keep the local message instead of replacing it with the server echo.
+        const optimisticExists = prev.some(
+          (existing) =>
+            existing.id.startsWith("local-") &&
+            existing.userId === msg.userId &&
+            existing.text === msg.text
+        );
+
+        if (optimisticExists) {
+          return prev;
+        }
+
+        // Message came from another collaborator.
+        return [...prev, msg];
+      });
     };
 
-    // Chat typing status
     const handleTypingStatus = (data: { socketId: string; username: string; isTyping: boolean }) => {
-      setTypingUsers((prev) => {
+      setTypingUsers((prev: string[]) => {
         if (data.isTyping) {
           if (!prev.includes(data.username)) return [...prev, data.username];
           return prev;
         } else {
-          return prev.filter((name) => name !== data.username);
+          return prev.filter((name: string) => name !== data.username);
         }
       });
     };
 
-    // File created
     const handleFileCreated = (data: { file: CodeFile; activeFileId: string; files: CodeFile[] }) => {
       setFiles(data.files);
       setActiveFileId(data.activeFileId);
     };
 
-    // File deleted
     const handleFileDeleted = (data: { fileId: string; activeFileId: string; files: CodeFile[] }) => {
       setFiles(data.files);
       setActiveFileId(data.activeFileId);
     };
 
-    // File renamed
     const handleFileRenamed = (data: { fileId: string; newName: string; newLanguage?: SupportedLanguage; files: CodeFile[] }) => {
       setFiles(data.files);
     };
 
-    // User switched file
     const handleUserSwitchedFile = (data: { socketId: string; activeFileId: string }) => {
-      setUsers((prev) =>
-        prev.map((u) => (u.socketId === data.socketId ? { ...u, activeFileId: data.activeFileId } : u))
+      setUsers((prev: any[]) =>
+        prev.map((u: { socketId: string }) => (u.socketId === data.socketId ? { ...u, activeFileId: data.activeFileId } : u))
       );
     };
 
-    // Checkpoint saved
     const handleNewVersion = (data: { snapshot: VersionSnapshot; versionHistory: VersionSnapshot[] }) => {
       setVersionHistory(data.versionHistory);
     };
 
-    // Checkpoint restored
     const handleRestored = (data: { files: CodeFile[]; versionHistory: VersionSnapshot[] }) => {
       setFiles(data.files);
       setVersionHistory(data.versionHistory);
     };
+    //connect
+    const socket = socketService.connect();
 
     socket.on("connect", handleConnect);
     socket.on("disconnect", handleDisconnect);
@@ -311,9 +431,10 @@ export default function App() {
 
     if (socket.connected) {
       handleConnect();
+    } else {
+      socket.connect();
     }
 
-    // Measure ping latency
     const pingTimer = setInterval(() => {
       setLatency(socketService.getLatency() || Math.floor(10 + Math.random() * 8));
     }, 4000);
@@ -343,8 +464,8 @@ export default function App() {
   const handleCodeChange = (newContent: string, crdtOps?: CRDTOperation[], isRemoteMerge?: boolean) => {
     if (!activeFile) return;
 
-    setFiles((prevFiles) =>
-      prevFiles.map((f) => (f.id === activeFile.id ? { ...f, content: newContent } : f))
+    setFiles((prevFiles: any[]) =>
+      prevFiles.map((f: { id: any }) => (f.id === activeFile.id ? { ...f, content: newContent } : f))
     );
 
     // If this update was already merged from remote CRDT, do not re-emit
@@ -373,7 +494,6 @@ export default function App() {
   };
 
   // Cursor movement throttled
-  const lastCursorEmitRef = useRef<number>(0);
   const handleCursorChange = (cursor: { line: number; ch: number } | null, selection: any) => {
     if (!activeFile) return;
     const now = Date.now();
@@ -451,8 +571,8 @@ export default function App() {
   // Rename file
   const handleRenameFile = (fileId: string, newName: string, newLanguage: SupportedLanguage) => {
     // Optimistically update local files state immediately
-    setFiles((prev) =>
-      prev.map((f) => (f.id === fileId ? { ...f, name: newName, language: newLanguage } : f))
+    setFiles((prev: any[]) =>
+      prev.map((f: { id: string }) => (f.id === fileId ? { ...f, name: newName, language: newLanguage } : f))
     );
     socketService.renameFile(roomId, fileId, newName, newLanguage);
   };
@@ -469,7 +589,29 @@ export default function App() {
 
   // Send Chat
   const handleSendChatMessage = (text: string) => {
-    socketService.sendChatMessage(roomId, text);
+    const trimmedText = text.trim();
+
+    if (!trimmedText) return;
+
+    const sender = currentUser ?? {
+      id: "local-user",
+      username: "You",
+      color: "#818cf8",
+    };
+
+    const optimisticMessage: ChatMessage = {
+      id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      userId: sender.id,
+      username: sender.username,
+      userColor: sender.color,
+      text: trimmedText,
+      timestamp: Date.now(),
+      type: "chat",
+    };
+
+    setChatMessages((prev) => [...prev, optimisticMessage]);
+
+    socketService.sendChatMessage(roomId, trimmedText);
   };
 
   // Switch Room
@@ -516,7 +658,7 @@ export default function App() {
         onToggleSimulator={() => setIsSimulatorOpen(true)}
         isSimulatorActive={false}
         onOpenChat={() => {
-          setIsChatOpen((prev) => !prev);
+          setIsChatOpen((prev: any) => !prev);
           setUnreadChatCount(0);
         }}
         unreadChatCount={unreadChatCount}
@@ -550,7 +692,7 @@ export default function App() {
               onCursorChange={handleCursorChange}
               onRunCode={handleRunCode}
               onSaveCheckpoint={() => setIsHistoryModalOpen(true)}
-              onRegisterPrettify={(fn) => {
+              onRegisterPrettify={(fn: any) => {
                 prettifyActiveFileRef.current = fn;
               }}
             />
@@ -579,7 +721,7 @@ export default function App() {
           currentUser={currentUser}
           typingUsers={typingUsers}
           onSendMessage={handleSendChatMessage}
-          onTyping={(isTyping) => socketService.setTyping(roomId, isTyping)}
+          onTyping={(isTyping: boolean) => socketService.setTyping(roomId, isTyping)}
         />
       </div>
 
@@ -600,6 +742,7 @@ export default function App() {
         onClose={() => setIsRoomModalOpen(false)}
         currentRoomId={roomId}
         onSwitchRoom={handleSwitchRoom}
+        authReady={authReady}
       />
 
       {/* Peer Simulator Modal */}

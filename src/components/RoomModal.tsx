@@ -1,230 +1,235 @@
-import React, { useState, useEffect } from "react";
-import { 
-  Users, 
-  DoorOpen, 
-  Plus, 
-  X, 
-  Check, 
-  Radio, 
-  Hash, 
-  Layers,
-  ArrowRight
-} from "lucide-react";
+import React, { useEffect, useState } from "react";
 
-interface RoomSummary {
+interface Room {
   id: string;
   name: string;
-  userCount: number;
-  fileCount: number;
-  versionCount: number;
-  latestVersion: number;
-  users: Array<{ id: string; username: string; color: string }>;
+  created_at?: string;
 }
 
 interface RoomModalProps {
   isOpen: boolean;
   onClose: () => void;
-  currentRoomId: string;
   onSwitchRoom: (roomId: string) => void;
+  currentRoomId: string;
+  authReady: boolean;
 }
 
-export const RoomModal: React.FC<RoomModalProps> = ({
+const RoomModal: React.FC<RoomModalProps> = ({
   isOpen,
   onClose,
-  currentRoomId,
   onSwitchRoom,
+  currentRoomId,
+  authReady,
 }) => {
-  const [rooms, setRooms] = useState<RoomSummary[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const [newRoomId, setNewRoomId] = useState("");
   const [newRoomName, setNewRoomName] = useState("");
-
-  const fetchRooms = async () => {
-    try {
-      setLoading(true);
-      const res = await fetch("/api/rooms");
-      const data = await res.json();
-      if (data.rooms) {
-        setRooms(data.rooms);
-      }
-    } catch (err) {
-      console.error("Failed to fetch rooms:", err);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   useEffect(() => {
     if (isOpen) {
       fetchRooms();
     }
-  }, [isOpen]);
+  }, [isOpen, authReady]);
+
+  const fetchRooms = async () => {
+    try {
+      setLoading(true);
+      setError("");
+
+      const token = sessionStorage.getItem("auth_token");
+
+
+      const res = await fetch("/api/rooms", {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!res.ok) {
+        throw new Error(`Failed to fetch rooms: ${res.status}`);
+      }
+
+      const data = await res.json();
+      console.log("[RoomModal] rooms response:", data);
+
+      // Handle both { rooms: [...] } and direct array [...] responses
+      if (Array.isArray(data)) {
+        setRooms(data);
+      } else if (data.rooms && Array.isArray(data.rooms)) {
+        setRooms(data.rooms);
+      } else {
+        setRooms([]);
+      }
+    } catch (err) {
+      console.error("Failed to fetch rooms:", err);
+      setError("Failed to load workspaces. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const handleCreateRoom = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newRoomId.trim()) return;
+    setError("");
 
-    const cleanId = newRoomId.trim().toLowerCase().replace(/[^a-z0-9-_]/g, "");
+    const trimmedId = newRoomId.trim();
+    if (!trimmedId) {
+      setError("Workspace ID is required.");
+      return;
+    }
+
+    const cleanId = trimmedId.toLowerCase().replace(/[^a-z0-9-_]/g, "");
+
+    if (cleanId.length < 3) {
+      setError("Workspace ID must be at least 3 characters long.");
+      return;
+    }
+
     try {
-      await fetch("/api/rooms", {
+      setLoading(true);
+      const token = sessionStorage.getItem("auth_token");
+
+      const res = await fetch("/api/rooms", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({
           id: cleanId,
           name: newRoomName.trim() || `Workspace ${cleanId}`,
         }),
       });
+
+      if (!res.ok) {
+        const errorText = await res.text();
+        console.error("Failed to create room:", errorText);
+        setError(`Failed to create workspace: ${res.status}`);
+        return;
+      }
+
       onSwitchRoom(cleanId);
       onClose();
+
+      // Reset form
+      setNewRoomId("");
+      setNewRoomName("");
     } catch (err) {
       console.error("Failed to create room:", err);
+      setError("An unexpected error occurred while creating the workspace.");
+    } finally {
+      setLoading(false);
     }
   };
 
-  if (!isOpen) return null;
+  if (!isOpen) {
+    return null;
+  }
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/75 backdrop-blur-xs flex items-center justify-center p-4">
-      <div className="bg-slate-900 border border-slate-700 w-full max-w-2xl rounded-xl shadow-2xl flex flex-col overflow-hidden">
-        {/* Header */}
-        <div className="h-14 px-5 border-b border-slate-800 flex items-center justify-between bg-slate-900/90">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400">
-              <DoorOpen className="w-4 h-4" />
-            </div>
-            <div>
-              <h2 className="text-sm font-bold text-slate-100">Collaborative Workspaces</h2>
-              <p className="text-[11px] text-slate-400">
-                Join an active collaborative session or launch a private workspace.
-              </p>
-            </div>
-          </div>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="w-full max-w-md rounded-xl bg-gray-900 border border-gray-800 p-6 shadow-2xl">
+        <div className="mb-6 flex items-center justify-between">
+          <h2 className="text-xl font-semibold text-white">
+            Switch Workspace
+          </h2>
           <button
+            type="button"
             onClick={onClose}
-            className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800 transition"
+            className="rounded-md p-1 text-gray-400 transition-colors hover:bg-gray-800 hover:text-white"
+            aria-label="Close modal"
           >
-            <X className="w-5 h-5" />
+            <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+              <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+            </svg>
           </button>
         </div>
 
-        {/* Modal Content */}
-        <div className="p-5 space-y-5 overflow-y-auto max-h-[70vh]">
-          {/* Create New Room Form */}
-          <form onSubmit={handleCreateRoom} className="bg-slate-950/60 p-4 rounded-xl border border-slate-800 space-y-3">
-            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-300">
-              <Plus className="w-3.5 h-3.5 text-indigo-400" />
-              <span>Create New Workspace</span>
+        {error && (
+          <div className="mb-4 rounded-lg border border-red-500/20 bg-red-500/10 p-3 text-sm text-red-400">
+            {error}
+          </div>
+        )}
+
+        <div className="mb-6">
+          <h3 className="mb-3 text-sm font-medium text-gray-300">
+            Available Workspaces
+          </h3>
+
+          {loading && rooms.length === 0 ? (
+            <p className="text-sm text-gray-400 animate-pulse">Loading workspaces...</p>
+          ) : rooms.length === 0 ? (
+            <p className="text-sm text-gray-400">
+              No workspaces available. Create one below.
+            </p>
+          ) : (
+            <div className="max-h-60 space-y-2 overflow-y-auto pr-2">
+              {rooms.map((room) => (
+                <button
+                  key={room.id}
+                  type="button"
+                  onClick={() => {
+                    onSwitchRoom(room.id);
+                    onClose();
+                  }}
+                  className={`w-full rounded-lg border p-3 text-left transition-colors ${room.id === currentRoomId
+                    ? "border-blue-500 bg-blue-500/10"
+                    : "border-gray-700 bg-gray-800 hover:border-gray-600 hover:bg-gray-750"
+                    }`}
+                >
+                  <div className="font-medium text-white">{room.name}</div>
+                  <div className="mt-1 text-xs text-gray-400">
+                    ID: {room.id}
+                  </div>
+                </button>
+              ))}
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+          )}
+        </div>
+
+        <div className="border-t border-gray-700 pt-5">
+          <h3 className="mb-3 text-sm font-medium text-gray-300">
+            Create New Workspace
+          </h3>
+
+          <form onSubmit={handleCreateRoom} className="space-y-3">
+            <div>
               <input
                 type="text"
-                placeholder="Room ID (e.g. team-sprint-04)"
                 value={newRoomId}
                 onChange={(e) => setNewRoomId(e.target.value)}
-                className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500 font-mono"
+                placeholder="Workspace ID (e.g., my-project)"
+                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white placeholder-gray-500 outline-none transition-colors focus:border-blue-500 focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
+                disabled={loading}
               />
-              <input
-                type="text"
-                placeholder="Display Name (optional)"
-                value={newRoomName}
-                onChange={(e) => setNewRoomName(e.target.value)}
-                className="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
-              />
+              <p className="mt-1 text-xs text-gray-500">
+                Lowercase letters, numbers, hyphens, and underscores only.
+              </p>
             </div>
+
+            <input
+              type="text"
+              value={newRoomName}
+              onChange={(e) => setNewRoomName(e.target.value)}
+              placeholder="Workspace name (optional)"
+              className="w-full rounded-lg border border-gray-700 bg-gray-800 px-3 py-2 text-sm text-white placeholder-gray-500 outline-none transition-colors focus:border-blue-500 focus:ring-1 focus:ring-blue-500 disabled:opacity-50"
+              disabled={loading}
+            />
+
             <button
               type="submit"
-              disabled={!newRoomId.trim()}
-              className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 text-white text-xs font-semibold py-2 rounded-lg transition cursor-pointer flex items-center justify-center gap-1.5"
+              disabled={loading || !newRoomId.trim()}
+              className="w-full rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <DoorOpen className="w-4 h-4" />
-              <span>Launch & Join Workspace</span>
+              {loading ? "Creating..." : "Create Workspace"}
             </button>
           </form>
-
-          {/* Active Rooms List */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
-                Active Rooms ({rooms.length})
-              </span>
-              <button
-                onClick={fetchRooms}
-                disabled={loading}
-                className="text-[11px] text-indigo-400 hover:text-indigo-300 cursor-pointer"
-              >
-                {loading ? "Refreshing..." : "Refresh"}
-              </button>
-            </div>
-
-            <div className="space-y-2">
-              {rooms.map((room) => {
-                const isCurrent = room.id === currentRoomId;
-                return (
-                  <div
-                    key={room.id}
-                    className={`p-3 rounded-lg border transition flex items-center justify-between ${
-                      isCurrent
-                        ? "bg-indigo-950/30 border-indigo-500/50 text-slate-100"
-                        : "bg-slate-950/40 border-slate-800 text-slate-300 hover:bg-slate-800/50 hover:border-slate-700"
-                    }`}
-                  >
-                    <div className="flex items-center gap-3 min-w-0">
-                      <div className="w-9 h-9 rounded-lg bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300 shrink-0">
-                        <Hash className="w-4 h-4 text-indigo-400" />
-                      </div>
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-semibold text-xs text-slate-100 truncate">
-                            {room.name}
-                          </span>
-                          <span className="font-mono text-[10px] text-slate-400 bg-slate-800 px-1.5 py-0.5 rounded">
-                            {room.id}
-                          </span>
-                          {isCurrent && (
-                            <span className="text-[10px] text-emerald-400 font-medium bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
-                              Current Room
-                            </span>
-                          )}
-                        </div>
-                        <div className="text-[11px] text-slate-400 flex items-center gap-3 mt-1">
-                          <span className="flex items-center gap-1">
-                            <Users className="w-3 h-3 text-slate-500" />
-                            {room.userCount} active {room.userCount === 1 ? "user" : "users"}
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <Layers className="w-3 h-3 text-slate-500" />
-                            {room.fileCount} files
-                          </span>
-                          <span className="text-slate-500">v{room.latestVersion}</span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div>
-                      {isCurrent ? (
-                        <span className="text-xs text-indigo-400 font-medium flex items-center gap-1">
-                          <Check className="w-4 h-4" /> Connected
-                        </span>
-                      ) : (
-                        <button
-                          onClick={() => {
-                            onSwitchRoom(room.id);
-                            onClose();
-                          }}
-                          className="flex items-center gap-1 text-xs bg-slate-800 hover:bg-indigo-600 text-slate-200 hover:text-white px-3 py-1.5 rounded-md border border-slate-700 transition cursor-pointer"
-                        >
-                          <span>Switch</span>
-                          <ArrowRight className="w-3.5 h-3.5" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
         </div>
       </div>
     </div>
   );
 };
+
+export default RoomModal;

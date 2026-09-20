@@ -12,7 +12,43 @@ test.describe("CodeSync.io E2E", () => {
   });
 
   test("connects to the real-time collaboration server", async ({ page }) => {
-    await page.goto("/?room=e2e-connection");
+    page.on("console", msg => {
+      console.log(`[BROWSER ${msg.type()}] ${msg.text()}`);
+    });
+
+    page.on("pageerror", error => {
+      console.log(`[PAGE ERROR] ${error.message}`);
+    });
+
+    page.on("request", request => {
+      if (
+        request.url().includes("/api/auth") ||
+        request.url().includes("/socket.io")
+      ) {
+        console.log(`[REQUEST] ${request.method()} ${request.url()}`);
+      }
+    });
+
+    page.on("response", response => {
+      if (
+        response.url().includes("/api/auth") ||
+        response.url().includes("/socket.io")
+      ) {
+        console.log(`[RESPONSE] ${response.status()} ${response.url()}`);
+      }
+    });
+
+    page.on("requestfailed", request => {
+      console.log(
+        `[REQUEST FAILED] ${request.method()} ${request.url()} - ${request.failure()?.errorText}`
+      );
+    });
+
+    await page.goto("/");
+
+    await page.waitForTimeout(5000);
+
+    console.log(`[PAGE URL] ${page.url()}`);
 
     const connectionStatus = page.locator(
       '[title*="Connected via WebSocket"]'
@@ -22,24 +58,24 @@ test.describe("CodeSync.io E2E", () => {
   });
 
   test("shows the default project files", async ({ page }) => {
-  await page.goto("/?room=e2e-files");
+    await page.goto("/?room=e2e-files");
 
-  await expect(
-    page.locator("#file-item-file-main-js").getByText("index.js", { exact: true })
-  ).toBeVisible();
+    await expect(
+      page.locator("#file-item-file-main-js").getByText("index.js", { exact: true })
+    ).toBeVisible();
 
-  await expect(
-    page.getByText("concurrency.ts", { exact: true })
-  ).toBeVisible();
+    await expect(
+      page.getByText("concurrency.ts", { exact: true })
+    ).toBeVisible();
 
-  await expect(
-    page.getByText("data_pipeline.py", { exact: true })
-  ).toBeVisible();
+    await expect(
+      page.getByText("data_pipeline.py", { exact: true })
+    ).toBeVisible();
 
-  await expect(
-    page.getByText("styles.css", { exact: true })
-  ).toBeVisible();
-});
+    await expect(
+      page.getByText("styles.css", { exact: true })
+    ).toBeVisible();
+  });
 
   test("opens collaboration chat", async ({ page }) => {
     await page.goto("/?room=e2e-chat");
@@ -57,7 +93,6 @@ test.describe("CodeSync.io E2E", () => {
     await page.locator("#toggle-chat-button").click();
 
     const messageInput = page.getByPlaceholder("Message collaborators...");
-
     await expect(messageInput).toBeVisible();
 
     await messageInput.fill("E2E collaboration test");

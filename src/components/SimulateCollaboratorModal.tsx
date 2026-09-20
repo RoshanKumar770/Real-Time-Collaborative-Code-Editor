@@ -57,10 +57,15 @@ export const SimulateCollaboratorModal: React.FC<SimulateCollaboratorModalProps>
     if (isRunning) return;
 
     appendLog(`Connecting real WebSocket client for ${selectedPersona.name}...`);
-    const socket = io({
-      transports: ["websocket", "polling"],
-      forceNew: true,
-    });
+    const token = sessionStorage.getItem("auth_token");
+
+const socket = io({
+  transports: ["websocket", "polling"],
+  forceNew: true,
+  auth: {
+    token,
+  },
+});
     peerSocketRef.current = socket;
 
     socket.on("connect", () => {
@@ -251,7 +256,13 @@ export const SimulateCollaboratorModal: React.FC<SimulateCollaboratorModalProps>
               onClick={() => {
                 if (!peerSocketRef.current) {
                   // Connect temporary peer socket if not running
-                  const socket = io({ transports: ["websocket", "polling"] });
+                  const token = sessionStorage.getItem("auth_token");
+                  const socket = io({
+                    transports: ["websocket", "polling"],
+                    auth: {
+                      token,
+                    },
+                  });
                   socket.emit("room:join", {
                     roomId,
                     username: selectedPersona.name,

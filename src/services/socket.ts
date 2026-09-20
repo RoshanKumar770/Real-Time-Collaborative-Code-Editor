@@ -9,12 +9,17 @@ class SocketService {
 
   public connect(): Socket {
     if (!this.socket) {
-      // Connect to same host/port
+      const token = sessionStorage.getItem("auth_token");
+
       this.socket = io({
+        autoConnect: false,
         transports: ["websocket", "polling"],
         reconnection: true,
         reconnectionAttempts: 10,
         reconnectionDelay: 1000,
+        auth: {
+          token,
+        },
       });
 
       this.socket.on("connect", () => {
@@ -26,7 +31,12 @@ class SocketService {
         this.isConnected = false;
         this.stopPingMeasurement();
       });
+
+      this.socket.on("connect_error", (error) => {
+        console.error("[Socket] connect_error:", error.message);
+      });
     }
+
     return this.socket;
   }
 
@@ -127,7 +137,7 @@ class SocketService {
       changeOrigin?: string;
     }) => void
   ): () => void {
-    if (!this.socket) return () => {};
+    if (!this.socket) return () => { };
     this.socket.on("crdt:ops", callback);
     return () => {
       this.socket?.off("crdt:ops", callback);
@@ -146,7 +156,17 @@ class SocketService {
 
   public sendChatMessage(roomId: string, text: string) {
     if (!this.socket) return;
-    this.socket.emit("chat:send", { roomId, text });
+
+    const send = () => {
+      this.socket.emit("chat:send", { roomId, text });
+    };
+
+    if (this.socket.connected) {
+      send();
+      return;
+    }
+
+    this.socket.once("connect", send);
   }
 
   public setTyping(roomId: string, isTyping: boolean) {
