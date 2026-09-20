@@ -34,10 +34,11 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
-        env:
-          DATABASE_URL: postgresql://codesync:codesync_ci@localhost:5433/codesync
-          REDIS_URL: redis://localhost:6379
-          JWT_SECRET: test-ci-secret-for-github-actions
+
+    env:
+      DATABASE_URL: postgresql://codesync:codesync_ci@localhost:5433/codesync
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: test-ci-secret-for-github-actions
 
     steps:
       - name: Checkout
