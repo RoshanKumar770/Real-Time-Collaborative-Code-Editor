@@ -8,6 +8,9 @@ import vm from "vm";
 import { createClient } from "redis";
 import { createAdapter } from "@socket.io/redis-adapter";
 import { initializeDatabase } from "./src/db/database";
+import { validateEnvironment } from "./src/config/env";
+
+validateEnvironment();
 
 import {
   createRoom,
