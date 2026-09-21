@@ -16,6 +16,14 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M  
 
   redis:
     image: redis:7-alpine
@@ -30,6 +38,14 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 64M  
 
   app:
     build:
@@ -43,12 +59,21 @@ services:
       NODE_ENV: production
       DATABASE_URL: postgresql://codesync:codesync_dev@postgres:5432/codesync
       REDIS_URL: redis://redis:6379
-      JWT_SECRET: ${JWT_SECRET}
+      JWT_SECRET: codesync-local-dev-secret-2026-very-long
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+
   nginx:
     build:
       context: ./nginx

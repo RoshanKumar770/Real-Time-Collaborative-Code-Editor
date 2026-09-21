@@ -3,7 +3,6 @@ import "dotenv/config";
 import http from "http";
 import path from "path";
 import { Server as SocketIOServer, Socket } from "socket.io";
-import { createServer as createViteServer } from "vite";
 import vm from "vm";
 import { createClient } from "redis";
 import { createAdapter } from "@socket.io/redis-adapter";
@@ -418,14 +417,28 @@ const apiRateLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+const metrics = {
+  startedAt: Date.now(),
+  requests: 0,
+  errors: 0,
+  socketConnections: 0,
+  socketDisconnections: 0,
+};
+
 app.use("/api/auth", authRateLimiter);
 app.use("/api", apiRateLimiter);
 
 app.use((req, res, next) => {
   const startedAt = Date.now();
 
+  metrics.requests++;
+
   res.on("finish", () => {
     const durationMs = Date.now() - startedAt;
+
+    if (res.statusCode >= 500) {
+      metrics.errors++;
+    }
 
     console.log(
       `[HTTP] ${req.method} ${req.originalUrl} ${res.statusCode} ${durationMs}ms`
@@ -478,6 +491,46 @@ app.get("/api/health", async (_req, res) => {
     activeUsers,
   });
 });
+
+app.get("/api/metrics", (_req, res) => {
+  let activeUsers = 0;
+
+  rooms.forEach((room) => {
+    activeUsers += room.users.size;
+  });
+
+  res.json({
+    uptimeSeconds: Math.floor(process.uptime()),
+    requests: metrics.requests,
+    errors: metrics.errors,
+    activeRooms: rooms.size,
+    activeUsers,
+    socketConnections: metrics.socketConnections,
+    socketDisconnections: metrics.socketDisconnections,
+  });
+});
+
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+
+  metrics.requests++;
+
+  res.on("finish", () => {
+    const durationMs = Date.now() - startedAt;
+
+    if (res.statusCode >= 500) {
+      metrics.errors++;
+    }
+
+    console.log(
+      `[HTTP] ${req.method} ${req.originalUrl} ${res.statusCode} ${durationMs}ms`
+    );
+  });
+
+  next();
+});
+
+
 const redisUrl = process.env.REDIS_URL || "redis://localhost:6379";
 
 const pubClient = createClient({
@@ -1025,6 +1078,7 @@ io.use((socket, next) => {
 });
 
 io.on("connection", (socket) => {
+  metrics.socketConnections++;
   let currentRoomId: string | null = null;
   let currentUser: ServerUser | null = null;
 
@@ -1708,9 +1762,12 @@ io.on("connection", (socket) => {
 // --- Vite Middleware or Static Production Serving ---
 if (process.env.NODE_ENV !== "test") {
   if (process.env.NODE_ENV !== "production") {
+    const { createServer: createViteServer } = await import("vite");
+
     const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
+      server: {
+        middlewareMode: true,
+      },
     });
 
     app.use(vite.middlewares);

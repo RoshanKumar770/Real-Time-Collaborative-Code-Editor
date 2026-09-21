@@ -15,6 +15,20 @@ test("reports healthy server dependencies", async ({ request }) => {
   expect(data.activeUsers).toBeGreaterThanOrEqual(0);
 });
 
+test("reports application metrics", async ({ request }) => {
+  const response = await request.get("/api/metrics");
+
+  expect(response.status()).toBe(200);
+
+  const data = await response.json();
+
+  expect(data.uptimeSeconds).toBeGreaterThanOrEqual(0);
+  expect(data.requests).toBeGreaterThanOrEqual(1);
+  expect(data.errors).toBeGreaterThanOrEqual(0);
+  expect(data.activeRooms).toBeGreaterThanOrEqual(0);
+  expect(data.activeUsers).toBeGreaterThanOrEqual(0);
+});
+
 test.describe("CodeSync.io E2E", () => {
   test("loads the collaborative workspace", async ({ page }) => {
     await page.goto("/?room=e2e-workspace");
