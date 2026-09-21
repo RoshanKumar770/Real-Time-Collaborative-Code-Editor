@@ -9,6 +9,8 @@ import { createClient } from "redis";
 import { createAdapter } from "@socket.io/redis-adapter";
 import { initializeDatabase } from "./src/db/database";
 import { validateEnvironment } from "./src/config/env";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 
 validateEnvironment();
 
@@ -392,6 +394,32 @@ export const io = new SocketIOServer(httpServer, {
 });
 
 app.use(express.json({ limit: "10mb" }));
+
+app.use(
+  helmet({
+    crossOriginEmbedderPolicy: false,
+  })
+);
+
+const authRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+  message: {
+    error: "Too many authentication attempts. Please try again later.",
+  },
+});
+
+const apiRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 300,
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+});
+
+app.use("/api/auth", authRateLimiter);
+app.use("/api", apiRateLimiter);
 
 app.use((req, res, next) => {
   const startedAt = Date.now();
